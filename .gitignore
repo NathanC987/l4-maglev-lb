@@ -1,0 +1,7 @@
+build/
+build-*/
+*.o
+*.a
+compile_commands.json
+.cache/
+scripts/.run/
