@@ -5,3 +5,5 @@ build-*/
 compile_commands.json
 .cache/
 scripts/.run/
+__pycache__/
+*.pyc

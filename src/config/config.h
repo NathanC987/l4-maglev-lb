@@ -21,6 +21,11 @@ struct config {
     size_t max_flows;
     struct config_backend backends[CONFIG_MAX_BACKENDS];
     size_t n_backends;
+
+    uint32_t hc_interval_ms;
+    uint32_t hc_timeout_ms;
+    uint32_t hc_rise;
+    uint32_t hc_fall;
 };
 
 /* Parses argv via getopt_long. Returns 0 if out is ready to use, 1 if --help

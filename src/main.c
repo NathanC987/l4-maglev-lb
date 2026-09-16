@@ -98,14 +98,19 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* M1: no active health checker. Interface exists and is exercised
-     * (create/start/stop) so M2 can implement it behind this same shape
-     * without touching main.c's wiring. */
     struct health_check_cfg hc_cfg = {
-        .interval_ms = 1000, .timeout_ms = 500, .rise = 2, .fall = 3};
+        .interval_ms = cfg.hc_interval_ms,
+        .timeout_ms = cfg.hc_timeout_ms,
+        .rise = cfg.hc_rise,
+        .fall = cfg.hc_fall,
+    };
     struct health_checker *hc = health_checker_create(bm, hc_cfg);
-    if (hc != NULL) {
-        health_checker_start(hc);
+    if (hc == NULL) {
+        fprintf(stderr, "main: health_checker_create failed; continuing without health "
+                         "checking (backends keep their last known health state)\n");
+    } else if (health_checker_start(hc) != 0) {
+        fprintf(stderr, "main: health_checker_start failed; continuing without health "
+                         "checking (backends keep their last known health state)\n");
     }
 
     int run_rc = 1; /* overwritten below only if datapath_run actually executes */

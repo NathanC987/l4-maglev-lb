@@ -236,6 +236,9 @@ int datapath_run(struct datapath *dp) {
                                            dp->cfg.udp_timeout_ns, dp->reaper_buckets_per_tick);
                 atomic_fetch_add_explicit(&dp->cfg.stats->conntrack_evictions, reaped,
                                            memory_order_relaxed);
+                /* Piggybacks on the reaper tick as this thread's own
+                 * between-packets quiescent point - see table_generator.h. */
+                table_generator_reclaim(dp->cfg.tg);
             } else if (fd == dp->raw_fd) {
                 handle_packet(dp, rx_buf, tx_buf);
             }

@@ -94,7 +94,16 @@ setup_backend() {
     ip netns exec "$ns" sysctl -qw "net.ipv4.conf.gre1.rp_filter=0"
     ip netns exec "$ns" ip addr add "$VIP/32" dev lo
 
-    ip netns exec "$ns" python3 "$SCRIPT_DIR/echo_server.py" "$VIP" "$BACKEND_PORT" "$label" \
+    # Bind to 0.0.0.0, not the VIP specifically: a wildcard bind is what
+    # real backend services do, and it's what makes this one listening
+    # socket answer BOTH the VIP (GRE-decapsulated client traffic - the
+    # accepted connection's local address is naturally the VIP, since
+    # that's what the client's packet was addressed to) AND the backend's
+    # own real IP (the health checker's direct TCP-connect probes, added in
+    # M2). Binding only to the VIP - the M1 setup - left the real IP
+    # completely unreachable, so every health probe got ECONNREFUSED
+    # regardless of whether the backend was actually up.
+    ip netns exec "$ns" python3 "$SCRIPT_DIR/echo_server.py" "0.0.0.0" "$BACKEND_PORT" "$label" \
         >"$PID_DIR/$label.log" 2>&1 &
     echo $! >"$PID_DIR/$label.pid"
 }

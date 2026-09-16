@@ -28,6 +28,17 @@ void table_generator_install_as_subscriber(struct table_generator *tg);
  * NULL only if no rebuild has ever succeeded. */
 struct routing_snapshot *table_generator_get_active(struct table_generator *tg);
 
+/* Frees snapshots retired by rebuild_and_install() since the last call.
+ * MUST be called only from the datapath thread (the sole reader of
+ * table_generator_get_active()), from a point in its own event loop where
+ * it holds no other reference to an older snapshot - e.g. once per
+ * conntrack-reaper tick, not from within packet handling. See the
+ * "retired_mu" comment in table_generator.c for why this is safe despite
+ * being a concurrent writer (the health checker thread) retiring
+ * snapshots the reader might still be using at the moment they're
+ * swapped out. */
+void table_generator_reclaim(struct table_generator *tg);
+
 uint64_t table_generator_last_regen_us(struct table_generator *tg);
 
 #endif /* L4MLB_BACKEND_TABLE_GENERATOR_H */

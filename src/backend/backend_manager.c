@@ -92,7 +92,7 @@ int backend_manager_remove(struct backend_manager *bm, uint32_t id) {
     return found ? 0 : -1;
 }
 
-void backend_manager_set_health(struct backend_manager *bm, uint32_t id, bool healthy) {
+bool backend_manager_set_health(struct backend_manager *bm, uint32_t id, bool healthy) {
     bool changed = false;
 
     pthread_mutex_lock(&bm->mu);
@@ -106,6 +106,7 @@ void backend_manager_set_health(struct backend_manager *bm, uint32_t id, bool he
     if (changed) {
         notify(bm);
     }
+    return changed;
 }
 
 void backend_manager_set_mac(struct backend_manager *bm, uint32_t id,

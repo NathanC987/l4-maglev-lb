@@ -18,12 +18,17 @@ struct health_checker *health_checker_create(struct backend_manager *bm,
                                               struct health_check_cfg cfg);
 void health_checker_destroy(struct health_checker *hc);
 
-/* M1: no-op stub. v1 backends are static - added once at startup and never
- * probed, so there is nothing to start. The real probing loop (its own
- * thread + epoll instance, non-blocking TCP-connect checks with rise/fall
- * counters calling backend_manager_set_health()) lands in milestone M2
- * behind this same interface, with no datapath changes required. Returns 0. */
+/* Spawns a dedicated thread running its own epoll instance: once per
+ * cfg.interval_ms it fires a non-blocking TCP connect() at every backend
+ * currently known to bm, concurrently, waits up to cfg.timeout_ms for them
+ * to resolve, and calls backend_manager_set_health() the moment a backend's
+ * consecutive success/failure count first crosses cfg.rise/cfg.fall.
+ * Returns 0 on success, -1 if the thread could not be created. */
 int health_checker_start(struct health_checker *hc);
+
+/* Signals the thread to stop (waking it even mid-round or mid-interval-wait)
+ * and joins it before returning, so it is safe to tear down bm immediately
+ * afterward. No-op if the checker was never started. */
 void health_checker_stop(struct health_checker *hc);
 
 #endif /* L4MLB_BACKEND_HEALTH_CHECKER_H */

@@ -49,32 +49,61 @@ void config_print_usage(const char *prog, FILE *stream) {
             "Usage: %s --iface IFACE --vip VIP_IP --director-ip DIRECTOR_IP\n"
             "          --backend IP:PORT [--backend IP:PORT ...]\n"
             "          [--ttl TTL] [--table-size M] [--max-flows N]\n"
+            "          [--hc-interval-ms MS] [--hc-timeout-ms MS]\n"
+            "          [--hc-rise N] [--hc-fall N]\n"
             "\n"
             "  --iface        Interface the LB listens/sends on (single shared L2\n"
             "                 segment in v1's netns topology: client- and backend-facing)\n"
             "  --vip          Virtual IP clients connect to\n"
             "  --director-ip  This host's own IP, used as the GRE outer source\n"
             "  --backend      Backend real IP:port; repeat for multiple backends\n"
-            "                 (port is currently unused by the datapath; reserved for\n"
-            "                 the M2 health checker)\n"
+            "                 (port is the health-check TCP-connect target, not used\n"
+            "                 for datapath forwarding, which is pure DSR passthrough)\n"
             "  --ttl          Outer IP TTL for GRE-encapsulated packets (default 64)\n"
             "  --table-size   Maglev lookup table size M, must be prime (default 65537)\n"
             "  --max-flows    Conntrack table capacity (default 1000000)\n"
+            "  --hc-interval-ms  Health-check probe interval (default 1000)\n"
+            "  --hc-timeout-ms   Health-check per-round timeout (default 500)\n"
+            "  --hc-rise         Consecutive successes to mark a backend healthy "
+            "(default 2)\n"
+            "  --hc-fall         Consecutive failures to mark a backend unhealthy "
+            "(default 3)\n"
             "  --help         Show this message\n",
             prog);
 }
+
+/* Long-only options (no short-flag equivalent) use values outside the ASCII
+ * range so they can't collide with any future short option. */
+enum {
+    OPT_HC_INTERVAL_MS = 1001,
+    OPT_HC_TIMEOUT_MS = 1002,
+    OPT_HC_RISE = 1003,
+    OPT_HC_FALL = 1004,
+};
 
 int config_parse_args(int argc, char **argv, struct config *out) {
     memset(out, 0, sizeof(*out));
     out->ttl = 64;
     out->table_size = 65537;
     out->max_flows = 1000000;
+    out->hc_interval_ms = 1000;
+    out->hc_timeout_ms = 500;
+    out->hc_rise = 2;
+    out->hc_fall = 3;
 
     static struct option long_opts[] = {
-        {"iface", required_argument, NULL, 'i'},      {"vip", required_argument, NULL, 'v'},
-        {"director-ip", required_argument, NULL, 'd'}, {"backend", required_argument, NULL, 'b'},
-        {"ttl", required_argument, NULL, 't'},          {"table-size", required_argument, NULL, 'm'},
-        {"max-flows", required_argument, NULL, 'f'},    {"help", no_argument, NULL, 'h'},
+        {"iface", required_argument, NULL, 'i'},
+        {"vip", required_argument, NULL, 'v'},
+        {"director-ip", required_argument, NULL, 'd'},
+        {"backend", required_argument, NULL, 'b'},
+        {"ttl", required_argument, NULL, 't'},
+        {"table-size", required_argument, NULL, 'm'},
+        {"max-flows", required_argument, NULL, 'f'},
+        {"hc-interval-ms", required_argument, NULL, OPT_HC_INTERVAL_MS},
+        {"hc-timeout-ms", required_argument, NULL, OPT_HC_TIMEOUT_MS},
+        {"hc-rise", required_argument, NULL, OPT_HC_RISE},
+        {"hc-fall", required_argument, NULL, OPT_HC_FALL},
+        {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
     };
 
@@ -137,6 +166,42 @@ int config_parse_args(int argc, char **argv, struct config *out) {
                 return -1;
             }
             out->max_flows = (size_t)f;
+            break;
+        }
+        case OPT_HC_INTERVAL_MS: {
+            long v = strtol(optarg, NULL, 10);
+            if (v <= 0) {
+                fprintf(stderr, "invalid --hc-interval-ms: %s\n", optarg);
+                return -1;
+            }
+            out->hc_interval_ms = (uint32_t)v;
+            break;
+        }
+        case OPT_HC_TIMEOUT_MS: {
+            long v = strtol(optarg, NULL, 10);
+            if (v <= 0) {
+                fprintf(stderr, "invalid --hc-timeout-ms: %s\n", optarg);
+                return -1;
+            }
+            out->hc_timeout_ms = (uint32_t)v;
+            break;
+        }
+        case OPT_HC_RISE: {
+            long v = strtol(optarg, NULL, 10);
+            if (v <= 0) {
+                fprintf(stderr, "invalid --hc-rise: %s\n", optarg);
+                return -1;
+            }
+            out->hc_rise = (uint32_t)v;
+            break;
+        }
+        case OPT_HC_FALL: {
+            long v = strtol(optarg, NULL, 10);
+            if (v <= 0) {
+                fprintf(stderr, "invalid --hc-fall: %s\n", optarg);
+                return -1;
+            }
+            out->hc_fall = (uint32_t)v;
             break;
         }
         case 'h':
