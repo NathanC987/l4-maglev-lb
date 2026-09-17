@@ -16,6 +16,7 @@ include(sanitizers)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XXHASH REQUIRED libxxhash)
+pkg_check_modules(NCURSES REQUIRED ncursesw)
 find_package(Threads REQUIRED)
 
 set(MAGLEV_LB_SOURCES
@@ -37,12 +38,14 @@ set(MAGLEV_LB_SOURCES
     src/backend/table_generator.c
     src/stats/stats_registry.c
     src/forward/datapath.c
+    src/ui/tui.c
 )
 
 add_executable(maglev-lb ${MAGLEV_LB_SOURCES})
-target_include_directories(maglev-lb PRIVATE src ${XXHASH_INCLUDE_DIRS})
-target_link_libraries(maglev-lb PRIVATE l4mlb_warnings ${XXHASH_LIBRARIES} Threads::Threads)
-target_link_directories(maglev-lb PRIVATE ${XXHASH_LIBRARY_DIRS})
+target_include_directories(maglev-lb PRIVATE src ${XXHASH_INCLUDE_DIRS} ${NCURSES_INCLUDE_DIRS})
+target_link_libraries(maglev-lb PRIVATE l4mlb_warnings ${XXHASH_LIBRARIES} ${NCURSES_LIBRARIES}
+                       Threads::Threads)
+target_link_directories(maglev-lb PRIVATE ${XXHASH_LIBRARY_DIRS} ${NCURSES_LIBRARY_DIRS})
 
 enable_testing()
 add_subdirectory(test/unit)

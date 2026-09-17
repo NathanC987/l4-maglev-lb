@@ -49,6 +49,11 @@ static void test_pool_exhaustion(void) {
     conntrack_destroy(ct);
 }
 
+static void record_evicted(int32_t backend_id, void *ctx) {
+    int32_t *out = ctx;
+    *out = backend_id;
+}
+
 static void test_reap_expired(void) {
     struct conntrack_table *ct = conntrack_create(64);
     assert(ct != NULL);
@@ -57,11 +62,14 @@ static void test_reap_expired(void) {
     assert(conntrack_insert(ct, &k, 3, 0) == 0);
     assert(conntrack_active_flows(ct) == 1);
 
+    int32_t evicted_backend_id = -99;
     uint64_t timeout_ns = 1000;
-    size_t reaped = conntrack_reap_slice(ct, 10 * timeout_ns, timeout_ns, timeout_ns,
-                                          conntrack_bucket_count(ct));
+    size_t reaped =
+        conntrack_reap_slice(ct, 10 * timeout_ns, timeout_ns, timeout_ns,
+                              conntrack_bucket_count(ct), record_evicted, &evicted_backend_id);
     assert(reaped == 1);
     assert(conntrack_active_flows(ct) == 0);
+    assert(evicted_backend_id == 3); /* on_evict must report the backend the entry was pinned to */
 
     int32_t out;
     assert(conntrack_lookup(ct, &k, 20 * timeout_ns, &out) == 0);
@@ -76,7 +84,8 @@ static void test_does_not_reap_fresh_entries(void) {
     struct flow_key k = make_key(1);
     assert(conntrack_insert(ct, &k, 3, 1000) == 0);
 
-    size_t reaped = conntrack_reap_slice(ct, 1500, 1000000, 1000000, conntrack_bucket_count(ct));
+    size_t reaped =
+        conntrack_reap_slice(ct, 1500, 1000000, 1000000, conntrack_bucket_count(ct), NULL, NULL);
     assert(reaped == 0);
     assert(conntrack_active_flows(ct) == 1);
 

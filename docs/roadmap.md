@@ -23,12 +23,39 @@ original `--backend` list. `backend_manager_add`/`_remove` exist and work, but
 nothing currently calls them after startup; that would need a config-reload or
 control-plane surface, which is out of scope until M7.
 
-## M3 - visualization
+## M3 - visualization (done)
 
-An ncurses TUI (`src/ui/`, not yet started) polling `stats_registry_snapshot()`
-(already implemented and updated by the datapath on every packet, just with no
-consumer yet) once a second. A Prometheus text-exposition HTTP endpoint would follow,
-reading the same registry - no restructuring needed, by design.
+An ncurses TUI (`src/ui/tui.c`, opt-in via `--tui`) polling `stats_registry_snapshot()`,
+`backend_manager_snapshot_all()`, and `table_generator`'s generation/regen-time
+accessors once a second: global rx/tx/conntrack/drop counters plus a per-backend table
+(health, packets, bytes, active flows, health-check failures). Two small gaps this
+surfaced got filled in along the way, both in `stats_registry`: per-backend
+`active_flows` and `health_check_failures` were declared but nothing updated them -
+`conntrack_reap_slice()` now takes an eviction callback so the datapath can decrement
+`active_flows` when a flow times out, and `health_checker` now records every failed
+probe, not just the ones that cross the unhealthy threshold. Two unused, never-written
+fields (`maglev_table_regens`/`_last_us`) were removed rather than wired up, since
+`table_generator` already tracked the same thing correctly.
+
+Running the datapath and the TUI both need "the main thread" for different reasons
+(ncurses wants it for terminal I/O; the datapath's own signal handling assumed it was
+running there) - `--tui` now runs the datapath on its own thread while the TUI owns
+the main one, coordinated by a small joiner thread + `eventfd` so the TUI can `poll()`
+for "the datapath just stopped" instead of only noticing on its next redraw tick. This
+surfaced a real, pre-existing bug unrelated to the TUI itself: `health_checker`'s
+thread was being spawned *before* the code that blocks SIGINT/SIGTERM, so it inherited
+an unblocked signal mask - a process-directed SIGTERM could land on it and terminate
+the process via that thread's default disposition instead of the clean shutdown path,
+non-deterministically depending on which thread the kernel happened to pick. Headless
+mode had the exact same bug; it just never surfaced because nothing was checking
+`maglev-lb`'s own shutdown exit code, only its behavior *during* a run. Fixed by
+blocking the signals once, at the very top of `main()`, before any thread - including
+`health_checker`'s - is ever spawned. Verified in `scripts/run-tui-smoke-test.sh`,
+including under ThreadSanitizer with all four threads (main/TUI, datapath, joiner,
+health checker) running concurrently.
+
+A Prometheus text-exposition HTTP endpoint would be the natural follow-up, reading the
+same `stats_registry` - no restructuring needed, by design.
 
 ## M4 - benchmarking harness
 

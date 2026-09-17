@@ -14,13 +14,14 @@ next.
 
 ## Status
 
-- **M1** (thin end-to-end datapath) and **M2** (active health checking + live table
-  regeneration) are done and verified. See the roadmap doc for details.
+- **M1** (thin end-to-end datapath), **M2** (active health checking + live table
+  regeneration), and **M3** (ncurses TUI) are done and verified. See the roadmap doc
+  for details.
 
 ## Requirements
 
 - Linux, a C11 compiler, CMake ≥ 3.20
-- `libxxhash` (dev package) and `pkg-config`
+- `libxxhash` and `ncursesw` (dev packages) and `pkg-config`
 - `pthread` (part of glibc on modern systems)
 - For the test topology: `iproute2`, `nftables`, `python3`, `ethtool`
 - Root, for anything that touches raw sockets or network namespaces
@@ -47,15 +48,19 @@ sudo scripts/run-lb.sh               # runs maglev-lb inside the lb namespace
 sudo scripts/teardown-netns.sh       # tear it back down
 ```
 
+Add `--tui` to `run-lb.sh` for the live ncurses dashboard instead of plain log output
+(needs a real terminal - run it directly, not with output redirected to a file).
+
 Or run the full automated checks, which bring the topology up, run the load balancer,
 verify behavior, and tear down afterward:
 
 ```sh
 sudo scripts/run-integration-tests.sh    # TCP stickiness, UDP DSR, LB never sees replies
 sudo scripts/run-flow-regen-test.sh      # a flow survives a table regen after a backend dies
+sudo scripts/run-tui-smoke-test.sh       # --tui starts, renders, and exits cleanly (q and SIGTERM)
 ```
 
-Pass a specific binary as the first argument to either, e.g.
+Pass a specific binary as the first argument to any of these, e.g.
 `sudo scripts/run-integration-tests.sh build-tsan/maglev-lb`, to run the same checks
 against the Asan or Tsan build.
 
@@ -67,8 +72,9 @@ src/
   maglev/     Consistent-hash table generation and lookup
   conntrack/  Per-flow state so a flow keeps going to the same backend
   backend/    Backend set, health checking, table (re)generation
-  stats/      Atomic counters, pull-based (for a future TUI/exporter)
+  stats/      Atomic counters, pull-based (read by the TUI, and by a future exporter)
   forward/    The datapath event loop tying the above together
+  ui/         The ncurses TUI (--tui)
   config/     CLI parsing
   main.c
 test/unit/         CTest binaries for the modules above

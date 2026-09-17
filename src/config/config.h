@@ -1,6 +1,7 @@
 #ifndef L4MLB_CONFIG_CONFIG_H
 #define L4MLB_CONFIG_CONFIG_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -26,6 +27,8 @@ struct config {
     uint32_t hc_timeout_ms;
     uint32_t hc_rise;
     uint32_t hc_fall;
+
+    bool tui_enabled;
 };
 
 /* Parses argv via getopt_long. Returns 0 if out is ready to use, 1 if --help

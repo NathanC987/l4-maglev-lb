@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include "../stats/stats_registry.h"
 #include "backend_manager.h"
 
 struct health_check_cfg {
@@ -14,8 +15,11 @@ struct health_check_cfg {
 
 struct health_checker;
 
+/* stats may be NULL, in which case per-backend health_check_failures just
+ * isn't tracked (backend_manager_set_health() transitions still happen
+ * either way - stats is purely for observability). */
 struct health_checker *health_checker_create(struct backend_manager *bm,
-                                              struct health_check_cfg cfg);
+                                              struct health_check_cfg cfg, struct lb_stats *stats);
 void health_checker_destroy(struct health_checker *hc);
 
 /* Spawns a dedicated thread running its own epoll instance: once per

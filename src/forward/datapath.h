@@ -1,6 +1,7 @@
 #ifndef L4MLB_FORWARD_DATAPATH_H
 #define L4MLB_FORWARD_DATAPATH_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "../backend/table_generator.h"
@@ -33,5 +34,14 @@ void datapath_destroy(struct datapath *dp);
  * forward until a shutdown signal arrives. Returns 0 on clean shutdown, -1
  * on a fatal setup error (message already printed to stderr). */
 int datapath_run(struct datapath *dp);
+
+/* Thread-safe: true from just before the epoll loop starts until just
+ * before datapath_run() returns (however it returns - a clean shutdown or
+ * a setup/runtime error). Meant for another thread (e.g. a TUI owning the
+ * process's main thread while datapath_run() executes on its own) to
+ * notice the datapath has stopped on its own - from a signal it consumed,
+ * or an error - without that thread needing to touch anything else about
+ * struct datapath. */
+bool datapath_is_running(const struct datapath *dp);
 
 #endif /* L4MLB_FORWARD_DATAPATH_H */

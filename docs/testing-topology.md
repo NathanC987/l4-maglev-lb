@@ -110,9 +110,10 @@ sudo scripts/teardown-netns.sh     # tear it down
 
 sudo scripts/run-integration-tests.sh   # TCP stickiness + UDP DSR + bypass proof, self-contained
 sudo scripts/run-flow-regen-test.sh     # M2: a flow survives a table regen after a backend dies
+sudo scripts/run-tui-smoke-test.sh      # M3: --tui starts, renders, and exits cleanly (q, SIGTERM)
 ```
 
-Both `run-*-test.sh` scripts bring the topology up, run `maglev-lb`, check
+All three `run-*-test.sh` scripts bring the topology up, run `maglev-lb`, check
 everything, and tear down again on exit (via a `trap`) regardless of pass or fail.
 Pass an alternate binary path as the first argument to run the same checks against
 the Asan or Tsan build, e.g. `sudo scripts/run-flow-regen-test.sh build-tsan/maglev-lb`.

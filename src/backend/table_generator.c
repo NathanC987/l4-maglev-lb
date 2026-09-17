@@ -11,7 +11,7 @@ struct table_generator {
     struct backend_manager *bm;
     uint32_t m;
     _Atomic(struct routing_snapshot *) active;
-    uint64_t generation;
+    _Atomic uint64_t generation; /* atomic so table_generator_generation() can be read cross-thread (TUI) */
     _Atomic uint64_t last_regen_us;
 
     /* Snapshots swapped out by rebuild_and_install() are never freed by the
@@ -41,6 +41,7 @@ struct table_generator *table_generator_create(struct backend_manager *bm, uint3
     tg->bm = bm;
     tg->m = m;
     atomic_init(&tg->active, (struct routing_snapshot *)NULL);
+    atomic_init(&tg->generation, (uint64_t)0);
     atomic_init(&tg->last_regen_us, (uint64_t)0);
     pthread_mutex_init(&tg->retired_mu, NULL);
     return tg;
@@ -77,21 +78,21 @@ int table_generator_rebuild_and_install(struct table_generator *tg) {
         memcpy(views[i].mac, eligible[i].mac, ETH_ADDR_LEN);
     }
 
+    uint64_t new_generation = atomic_load_explicit(&tg->generation, memory_order_relaxed) + 1;
     uint64_t start = now_us();
-    struct routing_snapshot *new_snap =
-        routing_snapshot_create(views, n, tg->m, tg->generation + 1);
+    struct routing_snapshot *new_snap = routing_snapshot_create(views, n, tg->m, new_generation);
     if (new_snap == NULL) {
         return -1;
     }
     uint64_t elapsed = now_us() - start;
 
-    tg->generation++;
     struct routing_snapshot *old =
         atomic_exchange_explicit(&tg->active, new_snap, memory_order_release);
+    atomic_store_explicit(&tg->generation, new_generation, memory_order_relaxed);
     atomic_store_explicit(&tg->last_regen_us, elapsed, memory_order_relaxed);
     fprintf(stderr,
             "table_generator: regenerated (generation=%llu, %zu eligible backend(s), %llu us)\n",
-            (unsigned long long)tg->generation, n, (unsigned long long)elapsed);
+            (unsigned long long)new_generation, n, (unsigned long long)elapsed);
 
     if (old != NULL) {
         pthread_mutex_lock(&tg->retired_mu);
@@ -149,4 +150,8 @@ struct routing_snapshot *table_generator_get_active(struct table_generator *tg) 
 
 uint64_t table_generator_last_regen_us(struct table_generator *tg) {
     return atomic_load_explicit(&tg->last_regen_us, memory_order_relaxed);
+}
+
+uint64_t table_generator_generation(struct table_generator *tg) {
+    return atomic_load_explicit(&tg->generation, memory_order_relaxed);
 }

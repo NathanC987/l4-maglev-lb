@@ -32,6 +32,28 @@ void stats_record_backend_packet(struct lb_stats *s, uint32_t backend_id, size_t
     atomic_fetch_add_explicit(&b->bytes, bytes, memory_order_relaxed);
 }
 
+void stats_backend_flow_opened(struct lb_stats *s, uint32_t backend_id) {
+    if (backend_id >= s->max_backends) {
+        return;
+    }
+    atomic_fetch_add_explicit(&s->backends[backend_id].active_flows, 1, memory_order_relaxed);
+}
+
+void stats_backend_flow_closed(struct lb_stats *s, uint32_t backend_id) {
+    if (backend_id >= s->max_backends) {
+        return;
+    }
+    atomic_fetch_sub_explicit(&s->backends[backend_id].active_flows, 1, memory_order_relaxed);
+}
+
+void stats_backend_health_check_failed(struct lb_stats *s, uint32_t backend_id) {
+    if (backend_id >= s->max_backends) {
+        return;
+    }
+    atomic_fetch_add_explicit(&s->backends[backend_id].health_check_failures, 1,
+                               memory_order_relaxed);
+}
+
 void stats_registry_snapshot(const struct lb_stats *s, struct lb_stats_snapshot *out) {
     out->rx_packets = atomic_load_explicit(&s->rx_packets, memory_order_relaxed);
     out->rx_bytes = atomic_load_explicit(&s->rx_bytes, memory_order_relaxed);
@@ -46,9 +68,6 @@ void stats_registry_snapshot(const struct lb_stats *s, struct lb_stats_snapshot 
     out->conntrack_hits = atomic_load_explicit(&s->conntrack_hits, memory_order_relaxed);
     out->conntrack_misses = atomic_load_explicit(&s->conntrack_misses, memory_order_relaxed);
     out->conntrack_evictions = atomic_load_explicit(&s->conntrack_evictions, memory_order_relaxed);
-    out->maglev_table_regens = atomic_load_explicit(&s->maglev_table_regens, memory_order_relaxed);
-    out->maglev_table_regen_last_us =
-        atomic_load_explicit(&s->maglev_table_regen_last_us, memory_order_relaxed);
 }
 
 void stats_registry_snapshot_backend(const struct lb_stats *s, uint32_t backend_id,

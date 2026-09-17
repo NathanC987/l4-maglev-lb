@@ -27,6 +27,17 @@ int main(void) {
     stats_registry_snapshot_backend(&s, 99, &b_oob);
     assert(b_oob.packets == 0);
 
+    stats_backend_flow_opened(&s, 1);
+    stats_backend_flow_opened(&s, 1);
+    stats_backend_flow_closed(&s, 1);
+    stats_backend_health_check_failed(&s, 1);
+    stats_backend_flow_opened(&s, 99); /* out of range: must be a no-op, not a crash */
+
+    struct per_backend_stats_snapshot b1_after;
+    stats_registry_snapshot_backend(&s, 1, &b1_after);
+    assert(b1_after.active_flows == 1);
+    assert(b1_after.health_check_failures == 1);
+
     stats_registry_destroy(&s);
     printf("test_stats_registry: all tests passed\n");
     return 0;

@@ -23,8 +23,10 @@ struct lb_stats {
     _Atomic uint64_t drops_parse_error, drops_no_backend, drops_backend_unhealthy;
     _Atomic uint64_t drops_conntrack_full;
     _Atomic uint64_t conntrack_hits, conntrack_misses, conntrack_evictions;
-    _Atomic uint64_t maglev_table_regens;
-    _Atomic uint64_t maglev_table_regen_last_us;
+    /* Table generation count and last-regen timing live in table_generator
+     * (already tracked atomically there, since it's the thing performing
+     * the regeneration) - read them via table_generator_generation() and
+     * table_generator_last_regen_us() rather than duplicating them here. */
 
     /* Indexed directly by backend id. Only correct while ids stay within
      * [0, max_backends) - true for v1's static backend set (ids 0..n-1
@@ -42,6 +44,16 @@ void stats_registry_destroy(struct lb_stats *s);
  * out of range. */
 void stats_record_backend_packet(struct lb_stats *s, uint32_t backend_id, size_t bytes);
 
+/* Bounds-checked per-backend flow/health-probe accounting; no-op if
+ * backend_id is out of range. Opened/closed bracket a flow's lifetime in
+ * conntrack (called from the datapath thread on insert, and from the
+ * conntrack reaper's per-entry eviction callback); failed is called once
+ * per failed health-check probe (not just on a rise/fall transition), from
+ * the health checker thread. */
+void stats_backend_flow_opened(struct lb_stats *s, uint32_t backend_id);
+void stats_backend_flow_closed(struct lb_stats *s, uint32_t backend_id);
+void stats_backend_health_check_failed(struct lb_stats *s, uint32_t backend_id);
+
 struct per_backend_stats_snapshot {
     uint64_t packets, bytes, active_flows, health_check_failures;
 };
@@ -52,8 +64,6 @@ struct lb_stats_snapshot {
     uint64_t drops_parse_error, drops_no_backend, drops_backend_unhealthy;
     uint64_t drops_conntrack_full;
     uint64_t conntrack_hits, conntrack_misses, conntrack_evictions;
-    uint64_t maglev_table_regens;
-    uint64_t maglev_table_regen_last_us;
 };
 
 void stats_registry_snapshot(const struct lb_stats *s, struct lb_stats_snapshot *out);

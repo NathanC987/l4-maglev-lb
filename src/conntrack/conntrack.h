@@ -28,13 +28,21 @@ int conntrack_lookup(struct conntrack_table *ct, const struct flow_key *key, uin
 int conntrack_insert(struct conntrack_table *ct, const struct flow_key *key, int32_t backend_id,
                       uint64_t now_ns);
 
+typedef void (*conntrack_evict_fn)(int32_t backend_id, void *ctx);
+
 /* Sweeps up to max_buckets_this_tick buckets (starting from an internal
  * round-robin cursor that persists across calls), removing any entry whose
  * (now_ns - last_seen) exceeds the timeout for its protocol. Bounding the
  * work per call keeps reaping from causing a latency spike; a full sweep is
- * spread across many ticks. Returns the number of entries reaped. */
+ * spread across many ticks. Returns the number of entries reaped.
+ *
+ * on_evict, if non-NULL, is called once per reaped entry with the backend
+ * id it was pinned to (e.g. so the caller can decrement a per-backend
+ * active-flow counter) - synchronously, from within this call, on the
+ * caller's own thread. */
 size_t conntrack_reap_slice(struct conntrack_table *ct, uint64_t now_ns, uint64_t tcp_timeout_ns,
-                             uint64_t udp_timeout_ns, size_t max_buckets_this_tick);
+                             uint64_t udp_timeout_ns, size_t max_buckets_this_tick,
+                             conntrack_evict_fn on_evict, void *cb_ctx);
 
 size_t conntrack_bucket_count(const struct conntrack_table *ct);
 size_t conntrack_active_flows(const struct conntrack_table *ct);

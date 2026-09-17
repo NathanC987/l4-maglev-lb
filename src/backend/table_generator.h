@@ -41,4 +41,10 @@ void table_generator_reclaim(struct table_generator *tg);
 
 uint64_t table_generator_last_regen_us(struct table_generator *tg);
 
+/* Thread-safe (atomic) read of the current table generation number - how
+ * many times rebuild_and_install() has installed a new table. Safe to call
+ * from any thread, unlike table_generator_get_active(), which only the
+ * single datapath reader thread may call (see the reclaim comment above). */
+uint64_t table_generator_generation(struct table_generator *tg);
+
 #endif /* L4MLB_BACKEND_TABLE_GENERATOR_H */

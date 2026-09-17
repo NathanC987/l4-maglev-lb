@@ -94,7 +94,8 @@ int conntrack_insert(struct conntrack_table *ct, const struct flow_key *key, int
 }
 
 size_t conntrack_reap_slice(struct conntrack_table *ct, uint64_t now_ns, uint64_t tcp_timeout_ns,
-                             uint64_t udp_timeout_ns, size_t max_buckets_this_tick) {
+                             uint64_t udp_timeout_ns, size_t max_buckets_this_tick,
+                             conntrack_evict_fn on_evict, void *cb_ctx) {
     size_t reaped = 0;
     size_t buckets_to_scan = max_buckets_this_tick;
     if (buckets_to_scan > ct->bucket_count) {
@@ -110,11 +111,15 @@ size_t conntrack_reap_slice(struct conntrack_table *ct, uint64_t now_ns, uint64_
             struct conntrack_entry *e = *link;
             uint64_t timeout = (e->key.proto == IPPROTO_TCP) ? tcp_timeout_ns : udp_timeout_ns;
             if (now_ns - e->last_seen_ns > timeout) {
+                int32_t evicted_backend_id = e->backend_id;
                 *link = e->next;
                 e->next = ct->free_list;
                 ct->free_list = e;
                 ct->active--;
                 reaped++;
+                if (on_evict != NULL) {
+                    on_evict(evicted_backend_id, cb_ctx);
+                }
             } else {
                 link = &e->next;
             }

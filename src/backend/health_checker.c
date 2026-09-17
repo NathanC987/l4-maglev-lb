@@ -30,6 +30,7 @@ struct probe_state {
 struct health_checker {
     struct backend_manager *bm;
     struct health_check_cfg cfg;
+    struct lb_stats *stats; /* may be NULL - see header */
     pthread_t thread;
     int wake_fd;
     _Atomic bool running; /* true once the thread has actually started */
@@ -40,13 +41,15 @@ struct health_checker {
 };
 
 struct health_checker *health_checker_create(struct backend_manager *bm,
-                                              struct health_check_cfg cfg) {
+                                              struct health_check_cfg cfg,
+                                              struct lb_stats *stats) {
     struct health_checker *hc = calloc(1, sizeof(*hc));
     if (hc == NULL) {
         return NULL;
     }
     hc->bm = bm;
     hc->cfg = cfg;
+    hc->stats = stats;
     hc->wake_fd = eventfd(0, EFD_NONBLOCK);
     if (hc->wake_fd < 0) {
         free(hc);
@@ -116,6 +119,9 @@ static void record_result(struct health_checker *hc, uint32_t backend_id, bool o
             }
         }
     } else {
+        if (hc->stats != NULL) {
+            stats_backend_health_check_failed(hc->stats, backend_id);
+        }
         st->consecutive_ok = 0;
         if (st->consecutive_fail < hc->cfg.fall) {
             st->consecutive_fail++;

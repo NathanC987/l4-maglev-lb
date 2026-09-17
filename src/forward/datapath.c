@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,7 @@ struct datapath {
     int signalfd_fd;
     int epfd;
     size_t reaper_buckets_per_tick;
+    _Atomic bool is_running; /* for other threads (e.g. a TUI) to poll - see datapath_is_running() */
 };
 
 struct datapath *datapath_create(const struct datapath_config *cfg) {
@@ -117,6 +119,7 @@ static void handle_packet(struct datapath *dp, uint8_t *rx_buf, uint8_t *tx_buf)
             atomic_fetch_add_explicit(&stats->drops_conntrack_full, 1, memory_order_relaxed);
             return;
         }
+        stats_backend_flow_opened(stats, (uint32_t)backend_id);
     }
 
     const struct backend_view *backend = routing_snapshot_find_backend(snap, backend_id);
@@ -142,6 +145,13 @@ static void handle_packet(struct datapath *dp, uint8_t *rx_buf, uint8_t *tx_buf)
         atomic_fetch_add_explicit(&stats->tx_packets, 1, memory_order_relaxed);
         atomic_fetch_add_explicit(&stats->tx_bytes, (uint64_t)sent, memory_order_relaxed);
         stats_record_backend_packet(stats, (uint32_t)backend_id, (size_t)sent);
+    }
+}
+
+static void on_flow_evicted(int32_t backend_id, void *ctx) {
+    struct lb_stats *stats = ctx;
+    if (backend_id >= 0) {
+        stats_backend_flow_closed(stats, (uint32_t)backend_id);
     }
 }
 
@@ -211,14 +221,17 @@ int datapath_run(struct datapath *dp) {
     uint8_t tx_buf[TX_BUF_LEN];
     struct epoll_event events[MAX_EPOLL_EVENTS];
 
-    int running = 1;
-    while (running) {
+    atomic_store_explicit(&dp->is_running, true, memory_order_relaxed);
+
+    int keep_running = 1;
+    while (keep_running) {
         int n = epoll_wait(dp->epfd, events, MAX_EPOLL_EVENTS, -1);
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
             }
             fprintf(stderr, "datapath: epoll_wait: %s\n", strerror(errno));
+            atomic_store_explicit(&dp->is_running, false, memory_order_relaxed);
             return -1;
         }
 
@@ -226,14 +239,25 @@ int datapath_run(struct datapath *dp) {
             int fd = events[i].data.fd;
             if (fd == dp->signalfd_fd) {
                 struct signalfd_siginfo si;
-                ssize_t r = read(dp->signalfd_fd, &si, sizeof(si));
-                (void)r;
-                running = 0;
+                ssize_t r;
+                do {
+                    r = read(dp->signalfd_fd, &si, sizeof(si));
+                } while (r < 0 && errno == EINTR);
+                /* Only actually shut down on a full, successful read - a
+                 * defensive check, not a known failure mode: epoll already
+                 * told us this fd is readable, so this should always
+                 * succeed, but treating a short/failed read as "no signal
+                 * consumed" rather than "shut down anyway" costs nothing and
+                 * avoids ever reacting to uninitialized `si` data. */
+                if (r == (ssize_t)sizeof(si)) {
+                    keep_running = 0;
+                }
                 break;
             } else if (fd == dp->timerfd) {
-                size_t reaped =
-                    reaper_on_timer_fired(dp->timerfd, dp->cfg.ct, now_ns(), dp->cfg.tcp_timeout_ns,
-                                           dp->cfg.udp_timeout_ns, dp->reaper_buckets_per_tick);
+                size_t reaped = reaper_on_timer_fired(
+                    dp->timerfd, dp->cfg.ct, now_ns(), dp->cfg.tcp_timeout_ns,
+                    dp->cfg.udp_timeout_ns, dp->reaper_buckets_per_tick, on_flow_evicted,
+                    dp->cfg.stats);
                 atomic_fetch_add_explicit(&dp->cfg.stats->conntrack_evictions, reaped,
                                            memory_order_relaxed);
                 /* Piggybacks on the reaper tick as this thread's own
@@ -245,5 +269,10 @@ int datapath_run(struct datapath *dp) {
         }
     }
 
+    atomic_store_explicit(&dp->is_running, false, memory_order_relaxed);
     return 0;
+}
+
+bool datapath_is_running(const struct datapath *dp) {
+    return atomic_load_explicit(&dp->is_running, memory_order_relaxed);
 }

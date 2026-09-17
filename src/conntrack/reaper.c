@@ -24,9 +24,10 @@ int reaper_timerfd_create(uint32_t interval_ms) {
 
 size_t reaper_on_timer_fired(int timerfd, struct conntrack_table *ct, uint64_t now_ns,
                               uint64_t tcp_timeout_ns, uint64_t udp_timeout_ns,
-                              size_t buckets_per_tick) {
+                              size_t buckets_per_tick, conntrack_evict_fn on_evict, void *cb_ctx) {
     uint64_t expirations;
     ssize_t n = read(timerfd, &expirations, sizeof(expirations));
     (void)n; /* EAGAIN/short read is fine, we still run one sweep tick below */
-    return conntrack_reap_slice(ct, now_ns, tcp_timeout_ns, udp_timeout_ns, buckets_per_tick);
+    return conntrack_reap_slice(ct, now_ns, tcp_timeout_ns, udp_timeout_ns, buckets_per_tick,
+                                 on_evict, cb_ctx);
 }
