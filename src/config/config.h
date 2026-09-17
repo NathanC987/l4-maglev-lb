@@ -29,6 +29,7 @@ struct config {
     uint32_t hc_fall;
 
     bool tui_enabled;
+    uint16_t metrics_port; /* host byte order; 0 disables the Prometheus exporter */
 };
 
 /* Parses argv via getopt_long. Returns 0 if out is ready to use, 1 if --help

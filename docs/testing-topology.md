@@ -7,16 +7,17 @@ in `scripts/topology.sh` and built by `scripts/setup-netns.sh`.
 
 ```
                      br-lan (root netns), 10.99.0.0/24, MTU 1600
+                     also has 10.99.0.254/24 itself (HOST_IP - see below)
         ┌───────────────┬───────────────────┬───────────────────┐
    veth-client-br    veth-lb-br         veth-be1-br          veth-be2-br
         │                │                   │                     │
   [l4mlb-client]    [l4mlb-lb]         [l4mlb-be1]           [l4mlb-be2]
    veth-client        veth-lb            veth-be1               veth-be2
    10.99.0.2/24      10.99.0.1/24       10.99.0.11/24          10.99.0.12/24
-                                          gre1: remote 10.99.0.1     gre1: remote 10.99.0.1
-                                                local 10.99.0.11           local 10.99.0.12
-                                          VIP 10.99.0.100/32 on lo   VIP 10.99.0.100/32 on lo
-                                          echo server on 0.0.0.0:9000 (same on backend2)
+                  metrics on :9105  gre1: remote 10.99.0.1     gre1: remote 10.99.0.1
+                                          local 10.99.0.11           local 10.99.0.12
+                                    VIP 10.99.0.100/32 on lo   VIP 10.99.0.100/32 on lo
+                                    echo server on 0.0.0.0:9000 (same on backend2)
 
   client route: 10.99.0.100/32 via 10.99.0.1 dev veth-client
 ```
@@ -29,6 +30,14 @@ because it's a default gateway or otherwise in every packet's path). Backend rep
 go directly to the client over the same bridge; the load balancer never sees them,
 enforced by the bridge only forwarding unicast frames to the port that owns the
 destination MAC, not by anything in `maglev-lb` itself.
+
+The root netns also gets its own address directly on `br-lan` (`HOST_IP` in
+`topology.sh`) - purely for observability, so a process outside all four simulated
+namespaces (a host-networked Prometheus container, a `curl` from a real terminal) can
+reach the LB's metrics endpoint at `10.99.0.1:9105` without needing to be inside any
+of them. It's just another L3-adjacent host on the same bridge, exactly like the
+client and backends; nothing routes VIP traffic through it, so it has no effect on the
+DSR bypass proof below. See `monitoring/README.md` for how this gets used.
 
 ## Request path
 
@@ -108,7 +117,7 @@ sudo scripts/setup-netns.sh        # build the topology
 sudo scripts/run-lb.sh             # run maglev-lb inside the lb namespace
 sudo scripts/teardown-netns.sh     # tear it down
 
-sudo scripts/run-integration-tests.sh   # TCP stickiness + UDP DSR + bypass proof, self-contained
+sudo scripts/run-integration-tests.sh   # TCP stickiness + UDP DSR + bypass proof + metrics check
 sudo scripts/run-flow-regen-test.sh     # M2: a flow survives a table regen after a backend dies
 sudo scripts/run-tui-smoke-test.sh      # M3: --tui starts, renders, and exits cleanly (q, SIGTERM)
 ```
@@ -117,10 +126,16 @@ All three `run-*-test.sh` scripts bring the topology up, run `maglev-lb`, check
 everything, and tear down again on exit (via a `trap`) regardless of pass or fail.
 Pass an alternate binary path as the first argument to run the same checks against
 the Asan or Tsan build, e.g. `sudo scripts/run-flow-regen-test.sh build-tsan/maglev-lb`.
+`run-integration-tests.sh`'s last check `curl`s the LB's own `/metrics` endpoint
+(reachable at `127.0.0.1:9105` from inside the `lb` namespace) and asserts the numbers
+it reports (rx packets, conntrack hits, backend series count) actually match the
+traffic the test just generated - see `monitoring/README.md` for the Prometheus +
+Grafana stack that visualizes this same endpoint.
 
 Everything here needs root (raw sockets, network namespaces). If you're scripting
 this outside an interactive terminal where `sudo` can't prompt for a password, a
 narrowly-scoped `NOPASSWD` sudoers rule for exactly the commands involved (`ip`,
-`sysctl`, `ethtool`, `python3`, `kill`, and the scripts themselves) works and should
-be removed again once you're done - see the commands each script actually runs
-before deciding what to allow.
+`sysctl`, `ethtool`, `curl`, `python3`, `kill`, `docker`/`docker-compose` if you're
+also bringing up `monitoring/`, and the scripts themselves) works and should be
+removed again once you're done - see the commands each script actually runs before
+deciding what to allow.

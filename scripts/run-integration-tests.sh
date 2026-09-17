@@ -118,6 +118,31 @@ else
 fi
 
 echo ""
+echo "==> Checking the Prometheus /metrics endpoint reflects the traffic above"
+metrics="$(ip netns exec "$NS_LB" curl -s "http://127.0.0.1:$METRICS_PORT/metrics")"
+if [[ -z "$metrics" ]]; then
+    echo "FAIL: no response from :$METRICS_PORT/metrics"
+    overall_rc=1
+else
+    rx_packets="$(echo "$metrics" | grep -oP '^maglev_lb_rx_packets_total \K[0-9]+')"
+    hits="$(echo "$metrics" | grep -oP 'maglev_lb_conntrack_lookups_total\{result="hit"\} \K[0-9]+')"
+    backend_lines="$(echo "$metrics" | grep -c '^maglev_lb_backend_up{')"
+    echo "    rx_packets_total=$rx_packets conntrack_hits=$hits backend_up series=$backend_lines"
+    if [[ -z "$rx_packets" || "$rx_packets" -lt 40 ]]; then
+        echo "FAIL: expected at least 40 rx packets (40 TCP conns + 1 UDP), got '$rx_packets'"
+        overall_rc=1
+    elif [[ -z "$hits" || "$hits" -lt 1 ]]; then
+        echo "FAIL: expected at least one conntrack hit (second message on each TCP conn), got '$hits'"
+        overall_rc=1
+    elif [[ "$backend_lines" -ne 2 ]]; then
+        echo "FAIL: expected exactly 2 maglev_lb_backend_up series (one per backend), got $backend_lines"
+        overall_rc=1
+    else
+        echo "    OK: metrics endpoint reflects real traffic"
+    fi
+fi
+
+echo ""
 echo "==> maglev-lb stats at exit:"
 sed -n '/^maglev-lb:/p' "$LB_LOG" | sed 's/^/    /'
 

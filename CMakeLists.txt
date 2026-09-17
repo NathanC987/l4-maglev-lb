@@ -39,6 +39,7 @@ set(MAGLEV_LB_SOURCES
     src/stats/stats_registry.c
     src/forward/datapath.c
     src/ui/tui.c
+    src/ui/metrics_http.c
 )
 
 add_executable(maglev-lb ${MAGLEV_LB_SOURCES})

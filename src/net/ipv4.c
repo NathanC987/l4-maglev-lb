@@ -1,5 +1,6 @@
 #include "ipv4.h"
 
+#include <stdio.h>
 #include <string.h>
 
 int ipv4_parse(const uint8_t *buf, size_t len, struct ipv4_hdr_view *out) {
@@ -65,4 +66,9 @@ void ipv4_build(uint8_t *out, uint32_t src_ip, uint32_t dst_ip, uint8_t protocol
     uint16_t csum = ipv4_checksum(out, IPV4_MIN_HDR_LEN);
     out[10] = (uint8_t)(csum >> 8);
     out[11] = (uint8_t)(csum & 0xFF);
+}
+
+void ipv4_format(uint32_t addr, char *out, size_t out_cap) {
+    const uint8_t *b = (const uint8_t *)&addr;
+    snprintf(out, out_cap, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
 }

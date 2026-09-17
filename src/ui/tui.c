@@ -1,6 +1,5 @@
 #include "tui.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
 #include <ncurses.h>
 #include <poll.h>
@@ -8,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+#include "../net/ipv4.h"
 
 #define HEALTHY_PAIR 1
 #define UNHEALTHY_PAIR 2
@@ -29,12 +30,6 @@ void tui_destroy(struct tui *t) {
     free(t);
 }
 
-static void format_ip(uint32_t addr, char *out, size_t out_cap) {
-    struct in_addr a;
-    a.s_addr = addr;
-    snprintf(out, out_cap, "%s", inet_ntoa(a));
-}
-
 static const char *admin_state_str(enum backend_admin_state s) {
     switch (s) {
     case BACKEND_ENABLED:
@@ -52,7 +47,7 @@ static void draw(struct tui *t) {
     int row = 0;
 
     char vip_str[32];
-    format_ip(t->cfg.vip, vip_str, sizeof(vip_str));
+    ipv4_format(t->cfg.vip, vip_str, sizeof(vip_str));
     uint64_t generation = table_generator_generation(t->cfg.tg);
     uint64_t last_regen_us = table_generator_last_regen_us(t->cfg.tg);
 
@@ -88,7 +83,7 @@ static void draw(struct tui *t) {
     size_t n = backend_manager_snapshot_all(t->cfg.bm, backends, BACKEND_MAX);
     for (size_t i = 0; i < n; i++) {
         char addr_str[32];
-        format_ip(backends[i].addr, addr_str, sizeof(addr_str));
+        ipv4_format(backends[i].addr, addr_str, sizeof(addr_str));
         char addr_port[40];
         snprintf(addr_port, sizeof(addr_port), "%s:%u", addr_str, backends[i].port);
 

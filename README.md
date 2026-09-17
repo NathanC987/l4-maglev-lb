@@ -15,8 +15,9 @@ next.
 ## Status
 
 - **M1** (thin end-to-end datapath), **M2** (active health checking + live table
-  regeneration), and **M3** (ncurses TUI) are done and verified. See the roadmap doc
-  for details.
+  regeneration), and **M3** (ncurses TUI) are done and verified. A Prometheus exporter
+  and Grafana dashboard (see [`monitoring/`](monitoring/)) followed as a bonus round
+  before M4. See the roadmap doc for details.
 
 ## Requirements
 
@@ -64,6 +65,19 @@ Pass a specific binary as the first argument to any of these, e.g.
 `sudo scripts/run-integration-tests.sh build-tsan/maglev-lb`, to run the same checks
 against the Asan or Tsan build.
 
+## Monitoring: Prometheus + Grafana
+
+With the topology up and `maglev-lb` running, bring up a pre-wired Prometheus +
+Grafana stack (needs Docker):
+
+```sh
+cd monitoring && docker compose up -d
+```
+
+Grafana on http://localhost:3000 has the dashboard loaded already. See
+[`monitoring/README.md`](monitoring/README.md) for what's on it and how the containers
+reach into the netns topology.
+
 ## Project layout
 
 ```
@@ -74,11 +88,12 @@ src/
   backend/    Backend set, health checking, table (re)generation
   stats/      Atomic counters, pull-based (read by the TUI, and by a future exporter)
   forward/    The datapath event loop tying the above together
-  ui/         The ncurses TUI (--tui)
+  ui/         The ncurses TUI (--tui) and the Prometheus exporter (metrics_http.c)
   config/     CLI parsing
   main.c
 test/unit/         CTest binaries for the modules above
 test/integration/  Python test clients driven from scripts/run-*-test.sh
 scripts/           Netns/veth topology setup and orchestration scripts
+monitoring/        Prometheus + Grafana docker-compose stack and dashboard
 docs/              Architecture, algorithm, topology, and roadmap notes
 ```

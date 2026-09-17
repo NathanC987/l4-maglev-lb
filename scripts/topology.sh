@@ -12,6 +12,13 @@ BE1_IP=10.99.0.11
 BE2_IP=10.99.0.12
 VIP=10.99.0.100
 BACKEND_PORT=9000
+METRICS_PORT=9105
+
+# Root netns's own address directly on the bridge - not needed by the
+# datapath itself, only so a host-networked process (Prometheus, curl, a
+# human with tcpdump) can reach the LB's metrics endpoint at $LB_IP without
+# any of these namespaces. See docs/testing-topology.md.
+HOST_IP=10.99.0.254
 
 NS_CLIENT=l4mlb-client
 NS_LB=l4mlb-lb

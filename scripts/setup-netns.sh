@@ -30,6 +30,13 @@ echo "==> Creating bridge $BR in the root netns"
 ip link add "$BR" type bridge
 ip link set "$BR" up
 ip link set "$BR" mtu "$MTU"
+# Gives the root netns itself an address on the shared segment, purely for
+# observability (reaching the LB's metrics endpoint from outside any of the
+# simulated namespaces - e.g. a host-networked Prometheus container). Does
+# not participate in the DSR datapath at all: nothing routes client/backend
+# traffic through it, so it has no effect on the bypass proof in
+# run-integration-tests.sh.
+ip addr add "$HOST_IP/$SUBNET_CIDR" dev "$BR"
 
 create_veth_pair() {
     local ns=$1 ns_side=$2 br_side=$3 ns_ip=$4

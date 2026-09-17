@@ -54,8 +54,34 @@ blocking the signals once, at the very top of `main()`, before any thread - incl
 including under ThreadSanitizer with all four threads (main/TUI, datapath, joiner,
 health checker) running concurrently.
 
-A Prometheus text-exposition HTTP endpoint would be the natural follow-up, reading the
-same `stats_registry` - no restructuring needed, by design.
+## Prometheus + Grafana (done)
+
+A Prometheus text-exposition HTTP endpoint (`src/ui/metrics_http.c`, port 9105 by
+default, `--metrics-port 0` disables it), built the same way M3 predicted: reading
+`stats_registry`, `backend_manager`, `table_generator`, and `conntrack` with no
+restructuring. Its own thread, coordinated the same way as the TUI's - poll() with a
+stop `eventfd`, no dependency on ncurses' own timeout handling.
+
+Two of those needed a small thread-safety fix first, since they'd only ever had a
+single reader (the TUI, and only while a human is looking at it) and now had a second,
+independent one that could poll continuously: `conntrack`'s `active` flow counter and
+`table_generator`'s `generation` counter both became `_Atomic`.
+
+`monitoring/` has a docker-compose Prometheus + Grafana stack and one dashboard
+(`monitoring/grafana/dashboards/maglev-lb.json`, 27 panels across 5 rows: overview,
+client→LB traffic, LB-internal decisions, per-backend health/load, and Maglev table
+regeneration). `scripts/setup-netns.sh` gives the root netns its own address on the
+shared bridge (`HOST_IP` in `topology.sh`) so a host-networked Prometheus container can
+reach the LB's metrics endpoint inside its own netns - doesn't touch the DSR datapath
+at all, so it has no effect on the bypass proof.
+
+Every panel's query was verified against a live stack under real traffic (not just
+checked for valid PromQL syntax): Prometheus scraping with `health: up`, all ~20
+queries returning real data through Grafana's own datasource proxy, and a live
+backend-failure scenario (kill a backend, watch `maglev_lb_backend_up` flip,
+`maglev_lb_table_generation` increment, and per-backend traffic rebalance onto the
+survivor) - see `scripts/run-integration-tests.sh`'s metrics-endpoint check for the
+automated version of the first part.
 
 ## M4 - benchmarking harness
 

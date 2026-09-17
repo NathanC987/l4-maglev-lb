@@ -1,6 +1,7 @@
 #include "conntrack.h"
 
 #include <netinet/in.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,7 +20,10 @@ struct conntrack_table {
     struct conntrack_entry *slab;
     struct conntrack_entry *free_list;
     size_t sweep_cursor;
-    size_t active;
+    /* Only ever written by the datapath thread (conntrack_insert/reap_slice
+     * are not otherwise thread-safe - see conntrack.h), but read from other
+     * threads too (the metrics exporter), hence atomic rather than plain. */
+    _Atomic size_t active;
 };
 
 static size_t next_pow2(size_t x) {
@@ -89,7 +93,7 @@ int conntrack_insert(struct conntrack_table *ct, const struct flow_key *key, int
     size_t idx = (size_t)(flow_hash(key) & (ct->bucket_count - 1));
     e->next = ct->buckets[idx];
     ct->buckets[idx] = e;
-    ct->active++;
+    atomic_fetch_add_explicit(&ct->active, 1, memory_order_relaxed);
     return 0;
 }
 
@@ -115,7 +119,7 @@ size_t conntrack_reap_slice(struct conntrack_table *ct, uint64_t now_ns, uint64_
                 *link = e->next;
                 e->next = ct->free_list;
                 ct->free_list = e;
-                ct->active--;
+                atomic_fetch_sub_explicit(&ct->active, 1, memory_order_relaxed);
                 reaped++;
                 if (on_evict != NULL) {
                     on_evict(evicted_backend_id, cb_ctx);
@@ -133,5 +137,5 @@ size_t conntrack_bucket_count(const struct conntrack_table *ct) {
 }
 
 size_t conntrack_active_flows(const struct conntrack_table *ct) {
-    return ct->active;
+    return atomic_load_explicit(&ct->active, memory_order_relaxed);
 }

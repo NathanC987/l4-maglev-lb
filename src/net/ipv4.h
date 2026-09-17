@@ -33,4 +33,10 @@ uint16_t ipv4_checksum(const uint8_t *data, size_t len);
 void ipv4_build(uint8_t *out, uint32_t src_ip, uint32_t dst_ip, uint8_t protocol,
                  uint16_t total_len_host, uint8_t ttl);
 
+/* Formats an opaque network-byte-order IPv4 address as dotted-quad text into
+ * out (out_cap must be at least 16 for any valid address). Used by
+ * observability code (TUI, metrics exporter) that only ever displays
+ * addresses, never computes with them. */
+void ipv4_format(uint32_t addr, char *out, size_t out_cap);
+
 #endif /* L4MLB_NET_IPV4_H */

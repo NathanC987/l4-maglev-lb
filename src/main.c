@@ -20,6 +20,7 @@
 #include "net/eth.h"
 #include "net/raw_socket.h"
 #include "stats/stats_registry.h"
+#include "ui/metrics_http.h"
 #include "ui/tui.h"
 
 #define ARP_TIMEOUT_MS 2000
@@ -182,6 +183,7 @@ int main(int argc, char **argv) {
     struct lb_stats stats;
     bool stats_initialized = false;
     struct health_checker *hc = NULL;
+    struct metrics_http *mh = NULL;
     struct datapath *dp = NULL;
     int run_rc = 1;
 
@@ -258,6 +260,33 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (cfg.metrics_port != 0) {
+        struct metrics_http_config mh_cfg = {
+            .port = cfg.metrics_port,
+            .bm = bm,
+            .tg = tg,
+            .ct = ct,
+            .stats = &stats,
+            .table_size = cfg.table_size,
+            .configured_backends = cfg.n_backends,
+        };
+        mh = metrics_http_create(&mh_cfg);
+        if (mh == NULL) {
+            fprintf(stderr,
+                    "main: metrics_http_create failed; continuing without the Prometheus "
+                    "exporter\n");
+        } else if (metrics_http_start(mh) != 0) {
+            fprintf(stderr,
+                    "main: metrics_http_start failed (port %u in use?); continuing without "
+                    "the Prometheus exporter\n",
+                    cfg.metrics_port);
+            metrics_http_destroy(mh);
+            mh = NULL;
+        } else {
+            fprintf(stderr, "maglev-lb: Prometheus metrics on :%u/metrics\n", cfg.metrics_port);
+        }
+    }
+
     {
         struct datapath_config dp_cfg = {
             .ifname = cfg.iface,
@@ -287,6 +316,12 @@ int main(int argc, char **argv) {
 
 cleanup:
     datapath_destroy(dp);
+    /* Stop the metrics thread before touching anything it might still be
+     * reading mid-request (stats/ct/tg/bm) - see main.c's ordering note on
+     * table_generator_reclaim for the same principle applied to the
+     * datapath thread. */
+    metrics_http_stop(mh);
+    metrics_http_destroy(mh);
     if (stats_initialized) {
         stats_registry_destroy(&stats);
     }

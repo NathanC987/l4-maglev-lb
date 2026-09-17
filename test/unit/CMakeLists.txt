@@ -32,3 +32,14 @@ l4mlb_unit_test(test_gre
 l4mlb_unit_test(test_stats_registry
     ${CMAKE_SOURCE_DIR}/src/stats/stats_registry.c
 )
+
+l4mlb_unit_test(test_metrics_http
+    ${CMAKE_SOURCE_DIR}/src/ui/metrics_http.c
+    ${CMAKE_SOURCE_DIR}/src/backend/backend_manager.c
+    ${CMAKE_SOURCE_DIR}/src/backend/table_generator.c
+    ${CMAKE_SOURCE_DIR}/src/maglev/maglev_table.c
+    ${CMAKE_SOURCE_DIR}/src/maglev/hash.c
+    ${CMAKE_SOURCE_DIR}/src/conntrack/conntrack.c
+    ${CMAKE_SOURCE_DIR}/src/stats/stats_registry.c
+    ${CMAKE_SOURCE_DIR}/src/net/ipv4.c
+)

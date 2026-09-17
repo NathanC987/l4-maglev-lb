@@ -50,7 +50,7 @@ void config_print_usage(const char *prog, FILE *stream) {
             "          --backend IP:PORT [--backend IP:PORT ...]\n"
             "          [--ttl TTL] [--table-size M] [--max-flows N]\n"
             "          [--hc-interval-ms MS] [--hc-timeout-ms MS]\n"
-            "          [--hc-rise N] [--hc-fall N] [--tui]\n"
+            "          [--hc-rise N] [--hc-fall N] [--tui] [--metrics-port PORT]\n"
             "\n"
             "  --iface        Interface the LB listens/sends on (single shared L2\n"
             "                 segment in v1's netns topology: client- and backend-facing)\n"
@@ -69,6 +69,8 @@ void config_print_usage(const char *prog, FILE *stream) {
             "  --hc-fall         Consecutive failures to mark a backend unhealthy "
             "(default 3)\n"
             "  --tui          Run the ncurses dashboard instead of plain log output\n"
+            "  --metrics-port Port for the Prometheus /metrics HTTP endpoint (default 9105;\n"
+            "                 0 disables it)\n"
             "  --help         Show this message\n",
             prog);
 }
@@ -81,6 +83,7 @@ enum {
     OPT_HC_RISE = 1003,
     OPT_HC_FALL = 1004,
     OPT_TUI = 1005,
+    OPT_METRICS_PORT = 1006,
 };
 
 int config_parse_args(int argc, char **argv, struct config *out) {
@@ -92,6 +95,7 @@ int config_parse_args(int argc, char **argv, struct config *out) {
     out->hc_timeout_ms = 500;
     out->hc_rise = 2;
     out->hc_fall = 3;
+    out->metrics_port = 9105;
 
     static struct option long_opts[] = {
         {"iface", required_argument, NULL, 'i'},
@@ -106,6 +110,7 @@ int config_parse_args(int argc, char **argv, struct config *out) {
         {"hc-rise", required_argument, NULL, OPT_HC_RISE},
         {"hc-fall", required_argument, NULL, OPT_HC_FALL},
         {"tui", no_argument, NULL, OPT_TUI},
+        {"metrics-port", required_argument, NULL, OPT_METRICS_PORT},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
     };
@@ -210,6 +215,15 @@ int config_parse_args(int argc, char **argv, struct config *out) {
         case OPT_TUI:
             out->tui_enabled = true;
             break;
+        case OPT_METRICS_PORT: {
+            long v = strtol(optarg, NULL, 10);
+            if (v < 0 || v > 65535) {
+                fprintf(stderr, "invalid --metrics-port: %s\n", optarg);
+                return -1;
+            }
+            out->metrics_port = (uint16_t)v;
+            break;
+        }
         case 'h':
             config_print_usage(argv[0], stdout);
             return 1;

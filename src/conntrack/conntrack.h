@@ -45,6 +45,10 @@ size_t conntrack_reap_slice(struct conntrack_table *ct, uint64_t now_ns, uint64_
                              conntrack_evict_fn on_evict, void *cb_ctx);
 
 size_t conntrack_bucket_count(const struct conntrack_table *ct);
+
+/* Thread-safe (atomic) even though lookup/insert/reap_slice are not - safe
+ * to call from e.g. the metrics exporter thread while the datapath thread
+ * is concurrently inserting/reaping. */
 size_t conntrack_active_flows(const struct conntrack_table *ct);
 
 #endif /* L4MLB_CONNTRACK_CONNTRACK_H */

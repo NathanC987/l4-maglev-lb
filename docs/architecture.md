@@ -2,7 +2,7 @@
 
 ## Overview
 
-`maglev-lb` is a single binary. Two threads always run:
+`maglev-lb` is a single binary. Three threads always run:
 
 - **The datapath thread** (`src/forward/datapath.c`) runs an epoll loop over one raw
   socket. This is where every packet is received, parsed, looked up, and forwarded.
@@ -11,6 +11,8 @@
 - **The health checker thread** (`src/backend/health_checker.c`) runs its own epoll
   loop doing non-blocking TCP-connect probes against every backend, on a timer. It's
   the only thing that changes which backends are eligible for traffic.
+- **The metrics thread** (`src/ui/metrics_http.c`, unless `--metrics-port 0`) serves
+  Prometheus's `/metrics` scrape requests - see "The Prometheus exporter" below.
 
 With `--tui`, two more threads run: the **TUI thread** (the main thread, redrawing the
 ncurses dashboard - see below) and a small **joiner thread** that exists only to
@@ -18,8 +20,8 @@ ncurses dashboard - see below) and a small **joiner thread** that exists only to
 
 Everything else (`main.c`) is single-threaded setup: parse CLI args, block
 SIGINT/SIGTERM (see "Signal handling" below), resolve backend MAC addresses via ARP,
-build the first Maglev table, then start the health checker and (depending on mode)
-either run the datapath directly or hand off to `--tui`.
+build the first Maglev table, then start the health checker and metrics threads and
+(depending on mode) either run the datapath directly or hand off to `--tui`.
 
 ## Packet flow
 
@@ -51,9 +53,9 @@ triggers a fresh Maglev lookup and a new conntrack entry.
 | `maglev/` | The consistent-hashing table itself - see `docs/maglev-algorithm.md` |
 | `conntrack/` | A slab-allocated hash table of active flows, plus a bounded-per-tick reaper for idle ones |
 | `backend/` | The backend set (`backend_manager`), health probing (`health_checker`), and table (re)generation (`table_generator`) |
-| `stats/` | Plain atomic counters (`lb_stats`) with a pull-based snapshot function, updated by the datapath, the conntrack reaper, and the health checker; read by the TUI (and, in the future, a Prometheus exporter) |
+| `stats/` | Plain atomic counters (`lb_stats`) with a pull-based snapshot function, updated by the datapath, the conntrack reaper, and the health checker; read by the TUI and the Prometheus exporter |
 | `forward/` | The datapath event loop |
-| `ui/` | The ncurses TUI (`--tui`) |
+| `ui/` | The ncurses TUI (`--tui`) and the Prometheus exporter (`metrics_http.c`) |
 | `config/` | CLI argument parsing (`getopt_long`) |
 
 ## The routing snapshot: how two threads share the Maglev table safely
@@ -134,6 +136,31 @@ above). Waiting for input uses `poll()` on stdin directly, not ncurses' own
 joiner thread writes to the instant `pthread_join(dp_thread)` returns, so the TUI
 notices a stopped datapath immediately rather than on its next redraw tick.
 `datapath_is_running()` is still checked as a fallback on every tick regardless.
+
+## The Prometheus exporter
+
+`src/ui/metrics_http.c` is a small hand-rolled HTTP/1.1 server (no framework - a raw
+socket, `accept()`, one connection handled at a time) that answers every request,
+regardless of method or path, with a freshly-built Prometheus text-exposition body. It
+reads exactly what the TUI reads (`stats_registry`, `backend_manager`,
+`table_generator`), plus `conntrack_active_flows()` for a total-flows gauge the TUI
+doesn't show. Nothing is cached or pushed; a scrape always sees the current state.
+
+Its thread uses the same `poll()`-on-a-stop-`eventfd` pattern as the datapath/TUI
+coordination above, for the same reason: predictable shutdown that doesn't depend on
+any particular blocking call's signal-interruption behavior.
+
+Metric names are prefixed `maglev_lb_`, counters end in `_total`, and per-backend
+series carry both `backend_id` and `backend_addr` labels. The full list, each with a
+`# HELP` line explaining exactly what it counts, is in `build_metrics_body()` in
+`metrics_http.c` - that function is the single source of truth; `monitoring/`'s
+Grafana dashboard only ever visualizes what's already documented there.
+
+Two fields needed a thread-safety fix to become safely readable from this new second
+reader thread (previously only the TUI ever read them, and only interactively):
+`conntrack`'s `active` flow counter and `table_generator`'s `generation` counter both
+became `_Atomic`. `lb_stats` needed no changes - it was already atomic throughout, by
+design, from M1.
 
 ## Why one binary, one process
 
