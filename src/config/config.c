@@ -51,6 +51,7 @@ void config_print_usage(const char *prog, FILE *stream) {
             "          [--ttl TTL] [--table-size M] [--max-flows N]\n"
             "          [--hc-interval-ms MS] [--hc-timeout-ms MS]\n"
             "          [--hc-rise N] [--hc-fall N] [--tui] [--metrics-port PORT]\n"
+            "          [--admin-fifo PATH]\n"
             "\n"
             "  --iface        Interface the LB listens/sends on (single shared L2\n"
             "                 segment in v1's netns topology: client- and backend-facing)\n"
@@ -71,6 +72,9 @@ void config_print_usage(const char *prog, FILE *stream) {
             "  --tui          Run the ncurses dashboard instead of plain log output\n"
             "  --metrics-port Port for the Prometheus /metrics HTTP endpoint (default 9105;\n"
             "                 0 disables it)\n"
+            "  --admin-fifo   Path to a named pipe for admin commands (DRAIN <id> /\n"
+            "                 UNDRAIN <id>); must already exist (mkfifo) - unset\n"
+            "                 disables admin control entirely\n"
             "  --help         Show this message\n",
             prog);
 }
@@ -84,6 +88,7 @@ enum {
     OPT_HC_FALL = 1004,
     OPT_TUI = 1005,
     OPT_METRICS_PORT = 1006,
+    OPT_ADMIN_FIFO = 1007,
 };
 
 int config_parse_args(int argc, char **argv, struct config *out) {
@@ -111,6 +116,7 @@ int config_parse_args(int argc, char **argv, struct config *out) {
         {"hc-fall", required_argument, NULL, OPT_HC_FALL},
         {"tui", no_argument, NULL, OPT_TUI},
         {"metrics-port", required_argument, NULL, OPT_METRICS_PORT},
+        {"admin-fifo", required_argument, NULL, OPT_ADMIN_FIFO},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
     };
@@ -224,6 +230,9 @@ int config_parse_args(int argc, char **argv, struct config *out) {
             out->metrics_port = (uint16_t)v;
             break;
         }
+        case OPT_ADMIN_FIFO:
+            strncpy(out->admin_fifo, optarg, CONFIG_ADMIN_FIFO_LEN - 1);
+            break;
         case 'h':
             config_print_usage(argv[0], stdout);
             return 1;

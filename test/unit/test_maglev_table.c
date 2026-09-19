@@ -134,6 +134,36 @@ static void test_lookup_determinism(void) {
     maglev_table_free(t);
 }
 
+/* routing_snapshot_create()'s draining contract (see maglev_table.h): the
+ * table is built only from `candidates`, but `routable` (a superset) is
+ * what gets stored for id lookups. A draining backend must receive zero
+ * table slots while staying resolvable via routing_snapshot_find_backend() -
+ * this is the property table_generator relies on to keep already-pinned
+ * flows alive on a draining backend without handing it any new ones. */
+static void test_draining_gets_no_slots_but_stays_resolvable(void) {
+    struct backend_view routable[3] = {
+        {.id = 0, .addr = ip("10.99.0.11"), .port = 9000, .mac = {0}},
+        {.id = 1, .addr = ip("10.99.0.12"), .port = 9000, .mac = {0}}, /* draining */
+        {.id = 2, .addr = ip("10.99.0.13"), .port = 9000, .mac = {0}},
+    };
+    struct backend_view candidates[2] = {routable[0], routable[2]}; /* id 1 excluded */
+    uint32_t m = 65537;
+
+    struct routing_snapshot *snap = routing_snapshot_create(routable, 3, candidates, 2, m, 1);
+    assert(snap != NULL);
+
+    for (uint32_t i = 0; i < m; i++) {
+        assert(snap->table->lookup[i] != 1); /* backend 1 never receives a slot */
+    }
+
+    assert(routing_snapshot_find_backend(snap, 0) != NULL);
+    assert(routing_snapshot_find_backend(snap, 1) != NULL); /* still resolvable, just no slots */
+    assert(routing_snapshot_find_backend(snap, 2) != NULL);
+    assert(routing_snapshot_find_backend(snap, 3) == NULL); /* unknown id */
+
+    routing_snapshot_free(snap);
+}
+
 int main(void) {
     test_is_prime();
     test_empty_backend_set();
@@ -141,6 +171,7 @@ int main(void) {
     test_deterministic_and_order_independent();
     test_minimal_disruption();
     test_lookup_determinism();
+    test_draining_gets_no_slots_but_stays_resolvable();
     printf("test_maglev_table: all tests passed\n");
     return 0;
 }

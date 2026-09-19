@@ -199,6 +199,18 @@ static void build_metrics_body(struct metrics_http *m, struct metrics_buf *b) {
                    backends[i].admin_state == BACKEND_ENABLED ? 1 : 0);
     }
 
+    mb_appendf(b, "# HELP maglev_lb_backend_draining Whether the backend is currently DRAINING "
+                  "(1): no new flows, but flows already pinned to it via conntrack keep being "
+                  "forwarded until they finish naturally.\n");
+    mb_appendf(b, "# TYPE maglev_lb_backend_draining gauge\n");
+    for (size_t i = 0; i < n; i++) {
+        char addr[16];
+        ipv4_format(backends[i].addr, addr, sizeof(addr));
+        mb_appendf(b, "maglev_lb_backend_draining{backend_id=\"%u\",backend_addr=\"%s:%u\"} %d\n",
+                   backends[i].id, addr, backends[i].port,
+                   backends[i].admin_state == BACKEND_DRAINING ? 1 : 0);
+    }
+
     mb_appendf(b, "# HELP maglev_lb_backend_packets_total GRE-encapsulated packets forwarded "
                   "to this specific backend.\n");
     mb_appendf(b, "# TYPE maglev_lb_backend_packets_total counter\n");

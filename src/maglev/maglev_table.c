@@ -120,9 +120,12 @@ int32_t maglev_table_lookup(const struct maglev_table *t, const struct flow_key 
     return t->lookup[bucket];
 }
 
-struct routing_snapshot *routing_snapshot_create(const struct backend_view *backends, size_t n,
-                                                   uint32_t m, uint64_t generation) {
-    struct maglev_table *table = maglev_table_generate(backends, n, m);
+struct routing_snapshot *routing_snapshot_create(const struct backend_view *routable,
+                                                   size_t n_routable,
+                                                   const struct backend_view *candidates,
+                                                   size_t n_candidates, uint32_t m,
+                                                   uint64_t generation) {
+    struct maglev_table *table = maglev_table_generate(candidates, n_candidates, m);
     if (table == NULL) {
         return NULL;
     }
@@ -134,19 +137,19 @@ struct routing_snapshot *routing_snapshot_create(const struct backend_view *back
     }
 
     struct backend_view *copy = NULL;
-    if (n > 0) {
-        copy = malloc(sizeof(*copy) * n);
+    if (n_routable > 0) {
+        copy = malloc(sizeof(*copy) * n_routable);
         if (copy == NULL) {
             maglev_table_free(table);
             free(snap);
             return NULL;
         }
-        memcpy(copy, backends, sizeof(*copy) * n);
+        memcpy(copy, routable, sizeof(*copy) * n_routable);
     }
 
     snap->table = table;
     snap->backends = copy;
-    snap->n_backends = n;
+    snap->n_backends = n_routable;
     snap->generation = generation;
     return snap;
 }

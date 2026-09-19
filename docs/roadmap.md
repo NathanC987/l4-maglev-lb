@@ -83,11 +83,49 @@ backend-failure scenario (kill a backend, watch `maglev_lb_backend_up` flip,
 survivor) - see `scripts/run-integration-tests.sh`'s metrics-endpoint check for the
 automated version of the first part.
 
-## M4 - benchmarking harness
+## M4 - benchmarking harness (done)
 
-Traffic generation (a small custom sender reusing `net/raw_socket.c`, or the kernel's
-built-in `pktgen`), throughput/latency/CPU measurement, and a flow-churn test
-exercising conntrack's pre-allocated pool and reaper under load.
+Framed around a Netflix-style streaming scenario - many concurrent long-lived
+sessions, asymmetric bandwidth, and backends crashing/draining/scaling under real
+load - specifically so the whole system (client traffic, LB internals, backends) is
+visible together on one dashboard, not just raw synthetic pps numbers. Full details,
+including why each default parameter is what it is, in `docs/benchmarking.md`.
+
+Checking the original scope against the actual code before writing any scripts
+surfaced a real gap: `healthy` was the *only* state affecting routing, and it was
+binary and all-or-nothing - a backend going unhealthy for any reason (a real crash or
+a deliberate, graceful takedown) immediately cut off every flow already pinned to it,
+not just new ones. Distinguishing "crash" from "graceful removal" in a way that's
+actually true, not just narrated, needed a small new feature first:
+
+- **Backend draining** (`docs/draining.md`) - `struct backend`'s `admin_state` field
+  (`BACKEND_ENABLED`/`BACKEND_DRAINING`/`BACKEND_DISABLED`) existed from early on but
+  was never wired up. A `DRAINING` backend now receives zero *new* Maglev table slots
+  but stays in the routing snapshot's resolvable backend set, so flows already pinned
+  to it keep being forwarded normally until they finish on their own. Because table
+  slots store backend *ids*, not array indices, this needed no change at all to
+  `maglev_table_generate()` or to the atomic-swap/reclaim scheme
+  `docs/architecture.md` documents as the most carefully-reasoned part of the
+  codebase - `table_generator_rebuild_and_install()` just builds two backend lists
+  (routable vs. eligible-for-new-slots) instead of one. Triggered by an optional
+  `--admin-fifo` (`DRAIN <id>` / `UNDRAIN <id>`), polled by the health-checker
+  thread's existing event loop. Verified by `scripts/run-drain-test.sh` (default,
+  Asan, and Tsan builds): a held flow survives its own backend draining with
+  **zero** `drops_backend_unhealthy`, the exact property a plain unhealthy
+  transition can never have.
+
+The harness itself (`scripts/bench/`) splits into `controlled/` (fixed parameters,
+fast, reproducible - flow-churn, raw pps ceiling via `pktgen`, and a
+`tools/maglev_remap_report` binary quantifying Maglev's minimal-disruption property
+against naive `hash % N`) and `demo/` (one ~9-minute, narratively-paced scenario
+meant to be watched live: crash, graceful drain, and scale-out, against a randomized
+concurrent "viewer" load, on its own bench Grafana dashboard). A second surprise
+along the way: under DSR, a crashing backend's own RST/FIN traffic never reaches the
+LB at all (it goes straight to the client), so `drops_backend_unhealthy` is often
+*zero* even during a real crash - it only moves if a client-originated packet for an
+already-pinned flow happens to race the (typically sub-second) detection window. The
+controlled crash-vs-drain comparison treats that as a soft note rather than a hard
+assertion, and it's documented in `docs/benchmarking.md` rather than papered over.
 
 ## M5 - eBPF/XDP fast path (stretch)
 

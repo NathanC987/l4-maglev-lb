@@ -1,6 +1,7 @@
 #include "health_checker.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -14,11 +15,13 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Sentinel epoll_event.data.u64 value identifying the wake_fd (vs. a probe
- * socket, which uses its index into the round's backend array - always
- * < BACKEND_MAX, so never collides with this). */
+/* Sentinel epoll_event.data.u64 values identifying the wake_fd / admin FIFO
+ * (vs. a probe socket, which uses its index into the round's backend array -
+ * always < BACKEND_MAX, so never collides with either). */
 #define HC_WAKE_SENTINEL UINT64_MAX
-#define HC_MAX_EVENTS (BACKEND_MAX + 1)
+#define HC_ADMIN_SENTINEL (UINT64_MAX - 1)
+#define HC_MAX_EVENTS (BACKEND_MAX + 2)
+#define HC_ADMIN_LINE_MAX 128
 
 struct probe_state {
     uint32_t backend_id;
@@ -33,6 +36,9 @@ struct health_checker {
     struct lb_stats *stats; /* may be NULL - see header */
     pthread_t thread;
     int wake_fd;
+    int admin_fifo_fd; /* -1 if cfg.admin_fifo is empty or failed to open */
+    char admin_buf[HC_ADMIN_LINE_MAX];
+    size_t admin_buf_len;
     _Atomic bool running; /* true once the thread has actually started */
     _Atomic bool stop_requested;
     /* Persists rise/fall counters across rounds; linear-scanned, fine for
@@ -55,6 +61,22 @@ struct health_checker *health_checker_create(struct backend_manager *bm,
         free(hc);
         return NULL;
     }
+    hc->admin_fifo_fd = -1;
+    if (cfg.admin_fifo[0] != '\0') {
+        /* O_RDWR, not O_RDONLY: a FIFO opened read-only would see EPOLLHUP /
+         * read()==0 ("EOF") the instant no writer currently has it open,
+         * which is the normal state between drain commands, not a real
+         * end-of-stream. Holding our own write end open the whole time
+         * means there's always at least one writer, so the read end never
+         * spuriously EOFs - we just never actually write to it ourselves. */
+        hc->admin_fifo_fd = open(cfg.admin_fifo, O_RDWR | O_NONBLOCK);
+        if (hc->admin_fifo_fd < 0) {
+            fprintf(stderr,
+                    "health_checker: open(%s) failed: %s; continuing without admin control "
+                    "(DRAIN/UNDRAIN commands will be ignored)\n",
+                    cfg.admin_fifo, strerror(errno));
+        }
+    }
     atomic_init(&hc->running, false);
     atomic_init(&hc->stop_requested, false);
     return hc;
@@ -66,6 +88,9 @@ void health_checker_destroy(struct health_checker *hc) {
     }
     if (hc->wake_fd >= 0) {
         close(hc->wake_fd);
+    }
+    if (hc->admin_fifo_fd >= 0) {
+        close(hc->admin_fifo_fd);
     }
     free(hc);
 }
@@ -131,6 +156,62 @@ static void record_result(struct health_checker *hc, uint32_t backend_id, bool o
                         "health: backend id=%u is now UNHEALTHY (%u consecutive failed "
                         "probes)\n",
                         backend_id, hc->cfg.fall);
+            }
+        }
+    }
+}
+
+/* Parses one already-NUL-terminated admin line ("DRAIN <id>" / "UNDRAIN
+ * <id>") and applies it. Unrecognized lines are logged and otherwise
+ * ignored - this FIFO is meant for trusted local scripts, not untrusted
+ * input, so a malformed line just gets skipped rather than treated as fatal. */
+static void handle_admin_line(struct health_checker *hc, const char *line) {
+    char verb[16];
+    unsigned long id;
+    if (sscanf(line, "%15s %lu", verb, &id) != 2) {
+        fprintf(stderr,
+                "health: admin command ignored (expected \"DRAIN <id>\" or \"UNDRAIN <id>\"): "
+                "\"%s\"\n",
+                line);
+        return;
+    }
+
+    enum backend_admin_state state;
+    if (strcmp(verb, "DRAIN") == 0) {
+        state = BACKEND_DRAINING;
+    } else if (strcmp(verb, "UNDRAIN") == 0) {
+        state = BACKEND_ENABLED;
+    } else {
+        fprintf(stderr, "health: admin command ignored (unknown verb \"%s\")\n", verb);
+        return;
+    }
+
+    if (backend_manager_set_admin_state(hc->bm, (uint32_t)id, state)) {
+        fprintf(stderr, "health: backend id=%u admin_state -> %s\n", (uint32_t)id,
+                state == BACKEND_DRAINING ? "DRAINING" : "ENABLED");
+    }
+}
+
+/* Drains every byte currently available on the admin FIFO, splitting on '\n'
+ * into complete lines (a line spanning multiple read()s is reassembled via
+ * hc->admin_buf; an unreasonably long one is dropped and resynced on the
+ * next newline rather than overflowing the buffer). */
+static void process_admin_fifo(struct health_checker *hc) {
+    char buf[128];
+    ssize_t r;
+    while ((r = read(hc->admin_fifo_fd, buf, sizeof(buf))) > 0) {
+        for (ssize_t i = 0; i < r; i++) {
+            char c = buf[i];
+            if (c == '\n') {
+                hc->admin_buf[hc->admin_buf_len] = '\0';
+                if (hc->admin_buf_len > 0) {
+                    handle_admin_line(hc, hc->admin_buf);
+                }
+                hc->admin_buf_len = 0;
+            } else if (hc->admin_buf_len + 1 < sizeof(hc->admin_buf)) {
+                hc->admin_buf[hc->admin_buf_len++] = c;
+            } else {
+                hc->admin_buf_len = 0; /* overlong line: drop and resync */
             }
         }
     }
@@ -212,6 +293,10 @@ static void run_probe_round(struct health_checker *hc, int epfd) {
                 aborted = true; /* shutdown requested mid-round; abandon in-flight probes */
                 break;
             }
+            if (evs[k].data.u64 == HC_ADMIN_SENTINEL) {
+                process_admin_fifo(hc);
+                continue;
+            }
             size_t i = (size_t)evs[k].data.u64;
             int err = 0;
             socklen_t elen = sizeof(err);
@@ -238,8 +323,14 @@ static void run_probe_round(struct health_checker *hc, int epfd) {
 static void wait_next_interval(struct health_checker *hc, int epfd) {
     struct epoll_event ev;
     int r = epoll_wait(epfd, &ev, 1, (int)hc->cfg.interval_ms);
-    (void)r; /* either an ordinary timeout, or wake_fd fired for shutdown - either
-              * way the top-of-loop stop_requested check decides what happens next */
+    /* Three possibilities: an ordinary timeout (r==0), wake_fd fired for
+     * shutdown (the top-of-loop stop_requested check decides what happens
+     * next regardless), or the admin FIFO became readable - handled here so
+     * a DRAIN/UNDRAIN command lands immediately rather than waiting out the
+     * rest of the current interval. */
+    if (r == 1 && ev.data.u64 == HC_ADMIN_SENTINEL) {
+        process_admin_fifo(hc);
+    }
 }
 
 static void *thread_main(void *arg) {
@@ -254,6 +345,13 @@ static void *thread_main(void *arg) {
     ev.events = EPOLLIN;
     ev.data.u64 = HC_WAKE_SENTINEL;
     epoll_ctl(epfd, EPOLL_CTL_ADD, hc->wake_fd, &ev);
+
+    if (hc->admin_fifo_fd >= 0) {
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLIN;
+        ev.data.u64 = HC_ADMIN_SENTINEL;
+        epoll_ctl(epfd, EPOLL_CTL_ADD, hc->admin_fifo_fd, &ev);
+    }
 
     while (!atomic_load_explicit(&hc->stop_requested, memory_order_relaxed)) {
         run_probe_round(hc, epfd);

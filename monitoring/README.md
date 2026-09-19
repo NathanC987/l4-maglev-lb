@@ -49,3 +49,34 @@ organized to follow the request path:
 
 Every panel's metric is defined and commented in `src/ui/metrics_http.c`; the dashboard
 just visualizes what's already there.
+
+## The benchmark dashboard
+
+A second, independent dashboard, "L4 Maglev Load Balancer — Benchmark"
+(`grafana/dashboards/maglev-lb-bench.json`), scrapes the separate bench topology
+(`scripts/bench/`) via its own Prometheus instance (`docker-compose-bench.yml` +
+`prometheus-bench.yml`, port 9091) and its own Grafana datasource - kept fully
+separate from the base dashboard above specifically so the two topologies can never
+collide or make each other's panels ambiguous. Bring both up together:
+
+```sh
+cd monitoring
+docker compose -f docker-compose.yml -f docker-compose-bench.yml up -d
+```
+
+Tear down with the **same `-f` flags**, not just `docker compose down`: Compose only
+knows about the services/volumes declared in whatever files you pass it, so a plain
+`docker compose down` (or `up`) only ever sees `docker-compose.yml` and leaves the
+`prometheus-bench` container and its volume running/behind.
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose-bench.yml down -v
+```
+
+If you've already done the asymmetric thing above and want to clean up the orphan
+directly instead: `docker rm -f maglev-lb-prometheus-bench && docker volume rm
+monitoring_prometheus-bench-data`.
+
+See `docs/benchmarking.md` for what's on it (including the headline "DSR in action"
+panel, comparing the LB's own bandwidth against what the client actually receives)
+and how to run the scenario that feeds it.

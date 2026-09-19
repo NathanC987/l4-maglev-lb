@@ -250,6 +250,7 @@ int main(int argc, char **argv) {
             .rise = cfg.hc_rise,
             .fall = cfg.hc_fall,
         };
+        strncpy(hc_cfg.admin_fifo, cfg.admin_fifo, sizeof(hc_cfg.admin_fifo) - 1);
         hc = health_checker_create(bm, hc_cfg, &stats);
         if (hc == NULL) {
             fprintf(stderr, "main: health_checker_create failed; continuing without health "

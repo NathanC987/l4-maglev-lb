@@ -1,0 +1,309 @@
+{
+  "uid": "maglev-lb-bench",
+  "title": "L4 Maglev Load Balancer — Benchmark",
+  "description": "The bench topology (scripts/bench/): a Netflix-style streaming scenario against a larger backend set, plus the client's own (viewer-side) perspective. Independent Prometheus instance/datasource from the base 'L4 Maglev Load Balancer' dashboard - see docs/benchmarking.md.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "timezone": "browser",
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "5s",
+  "tags": ["maglev-lb", "l4-load-balancer", "benchmark"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
+      "options": {
+        "mode": "markdown",
+        "content": "# L4 Maglev Load Balancer — Benchmark\nThe bench topology (`scripts/bench/`): more backends, a paced asymmetric-bandwidth \"streaming\" workload, and scripted crash / graceful-drain / scale-out events (`scripts/bench/demo/run-streaming-demo.sh`). The **DSR in action** panel below is the headline: it plots the LB's own total bandwidth against what the client actually receives from backends - the LB structurally never sees that data, so the gap between the two lines *is* Direct Server Return working. See `docs/benchmarking.md`."
+      }
+    },
+    { "id": 2, "type": "row", "title": "Overview", "collapsed": false, "gridPos": { "x": 0, "y": 4, "w": 24, "h": 1 }, "panels": [] },
+    {
+      "id": 3, "type": "stat", "title": "Uptime",
+      "gridPos": { "x": 0, "y": 5, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "time() - maglev_lb_start_time_seconds", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Backends Eligible / Configured",
+      "description": "Eligible = healthy, admin-enabled (ENABLED, not DRAINING/DISABLED), and MAC-resolved.",
+      "gridPos": { "x": 4, "y": 5, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [
+        { "expr": "maglev_lb_backends_eligible", "refId": "A", "legendFormat": "eligible" },
+        { "expr": "maglev_lb_backends_configured", "refId": "B", "legendFormat": "configured" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "orientation": "horizontal" }
+    },
+    {
+      "id": 5, "type": "stat", "title": "Active Flows (LB-side)",
+      "gridPos": { "x": 8, "y": 5, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "maglev_lb_conntrack_active_flows", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 6, "type": "stat", "title": "Maglev Table Generation",
+      "gridPos": { "x": 12, "y": 5, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "maglev_lb_table_generation", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 7, "type": "stat", "title": "Active Viewer Sessions",
+      "description": "Concurrent client-side sessions currently streaming (scripts/bench/viewer_gen.py).",
+      "gridPos": { "x": 16, "y": 5, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "viewer_active_sessions", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 8, "type": "stat", "title": "Client-received bandwidth",
+      "description": "Bytes/sec the viewer generator actually received from backends - this NEVER transits the LB (DSR).",
+      "gridPos": { "x": 20, "y": 5, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "rate(viewer_bytes_received_total[1m])", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "Bps", "decimals": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "DSR in action: LB bandwidth vs. client-received bandwidth",
+      "description": "The LB's own total bandwidth (rx client requests/ACKs + tx GRE-encapsulated forwards) is tiny and roughly flat regardless of stream size, because it only ever forwards small client-originated packets. The client-received line is the actual 'video' data backends push - directly to the client, never through the LB. The gap between the two lines is Direct Server Return, made visible.",
+      "gridPos": { "x": 0, "y": 9, "w": 24, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [
+        { "expr": "sum(rate(maglev_lb_rx_bytes_total[1m])) + sum(rate(maglev_lb_tx_bytes_total[1m]))", "refId": "A", "legendFormat": "LB total bandwidth (requests + ACKs only)" },
+        { "expr": "rate(viewer_bytes_received_total[1m])", "refId": "B", "legendFormat": "client-received bandwidth (actual backend data, via DSR)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "gradientMode": "opacity" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    { "id": 10, "type": "row", "title": "Client → Load Balancer", "collapsed": false, "gridPos": { "x": 0, "y": 17, "w": 24, "h": 1 }, "panels": [] },
+    {
+      "id": 11, "type": "timeseries", "title": "Ingress packet rate",
+      "description": "Every client-originated packet transits the LB, including plain TCP ACKs for backend-pushed data - this is why pps here doesn't stay flat even though rx bandwidth (next panel) does.",
+      "gridPos": { "x": 0, "y": 18, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum(rate(maglev_lb_rx_packets_total[1m]))", "refId": "A", "legendFormat": "packets/sec" }],
+      "fieldConfig": { "defaults": { "unit": "pps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "gradientMode": "opacity" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Ingress bandwidth",
+      "gridPos": { "x": 6, "y": 18, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum(rate(maglev_lb_rx_bytes_total[1m]))", "refId": "A", "legendFormat": "bytes/sec" }],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "gradientMode": "opacity" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "Conntrack lookups: hit vs miss",
+      "gridPos": { "x": 12, "y": 18, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum by (result) (rate(maglev_lb_conntrack_lookups_total[1m]))", "refId": "A", "legendFormat": "{{result}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 25, "spanNulls": true, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 14, "type": "gauge", "title": "Conntrack hit ratio (5m)",
+      "gridPos": { "x": 18, "y": 18, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum(rate(maglev_lb_conntrack_lookups_total{result=\"hit\"}[5m])) / clamp_min(sum(rate(maglev_lb_conntrack_lookups_total[5m])), 1e-9)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "green", "value": 0.85 }] } }, "overrides": [] },
+      "options": { "showThresholdLabels": false, "showThresholdMarkers": true }
+    },
+    { "id": 15, "type": "row", "title": "Load Balancer Internals", "collapsed": false, "gridPos": { "x": 0, "y": 26, "w": 24, "h": 1 }, "panels": [] },
+    {
+      "id": 16, "type": "timeseries", "title": "Egress packet rate (to backends)",
+      "gridPos": { "x": 0, "y": 27, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum(rate(maglev_lb_tx_packets_total[1m]))", "refId": "A", "legendFormat": "packets/sec" }],
+      "fieldConfig": { "defaults": { "unit": "pps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "gradientMode": "opacity" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 17, "type": "timeseries", "title": "Drops by reason",
+      "gridPos": { "x": 6, "y": 27, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum by (reason) (rate(maglev_lb_drops_total[1m]))", "refId": "A", "legendFormat": "{{reason}}" }],
+      "fieldConfig": { "defaults": { "unit": "pps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 25, "spanNulls": true, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 18, "type": "timeseries", "title": "Conntrack evictions/sec",
+      "description": "Only moves once idle flows cross the 120s (TCP) idle timeout - see the demo's cool-down phase in docs/benchmarking.md.",
+      "gridPos": { "x": 12, "y": 27, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "rate(maglev_lb_conntrack_evictions_total[1m])", "refId": "A", "legendFormat": "evictions/sec" }],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 19, "type": "timeseries", "title": "Active flows over time",
+      "gridPos": { "x": 18, "y": 27, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "maglev_lb_conntrack_active_flows", "refId": "A", "legendFormat": "active flows" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    { "id": 20, "type": "row", "title": "Backends", "collapsed": false, "gridPos": { "x": 0, "y": 35, "w": 24, "h": 1 }, "panels": [] },
+    {
+      "id": 21, "type": "state-timeline", "title": "Backend health over time",
+      "description": "Green = healthy, red = unhealthy (health-checker TCP-connect probes).",
+      "gridPos": { "x": 0, "y": 36, "w": 24, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "maglev_lb_backend_up", "refId": "A", "legendFormat": "{{backend_addr}}" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 0 }, "1": { "text": "UP", "color": "green", "index": 1 } } }],
+          "custom": { "lineWidth": 0, "fillOpacity": 100 }
+        },
+        "overrides": []
+      },
+      "options": { "showValue": "never", "mergeValues": true, "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 22, "type": "state-timeline", "title": "Backend draining state over time",
+      "description": "Yellow = DRAINING (excluded from new flows, but still serving flows already pinned to it - see docs/draining.md). Grey = not draining.",
+      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "maglev_lb_backend_draining", "refId": "A", "legendFormat": "{{backend_addr}}" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [{ "type": "value", "options": { "0": { "text": "", "color": "dark-gray", "index": 0 }, "1": { "text": "DRAINING", "color": "yellow", "index": 1 } } }],
+          "custom": { "lineWidth": 0, "fillOpacity": 100 }
+        },
+        "overrides": []
+      },
+      "options": { "showValue": "never", "mergeValues": true, "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 23, "type": "timeseries", "title": "Per-backend packet rate (load distribution)",
+      "gridPos": { "x": 0, "y": 44, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum by (backend_addr) (rate(maglev_lb_backend_packets_total[1m]))", "refId": "A", "legendFormat": "{{backend_addr}}" }],
+      "fieldConfig": { "defaults": { "unit": "pps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 24, "type": "timeseries", "title": "Per-backend active flows",
+      "gridPos": { "x": 12, "y": 44, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "maglev_lb_backend_active_flows", "refId": "A", "legendFormat": "{{backend_addr}}" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 25, "type": "timeseries", "title": "Per-backend health-check failure rate",
+      "gridPos": { "x": 0, "y": 52, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum by (backend_addr) (rate(maglev_lb_backend_health_check_failures_total[1m]))", "refId": "A", "legendFormat": "{{backend_addr}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 26, "type": "timeseries", "title": "LB-forwarded bytes per backend (requests/ACKs only, NOT backend-pushed data)",
+      "description": "This is what the LB itself sees per backend - tiny, since DSR means the backend's actual reply data never transits the LB. Compare with the 'Client-received bandwidth' panel above.",
+      "gridPos": { "x": 12, "y": 52, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum by (backend_addr) (rate(maglev_lb_backend_bytes_total[1m]))", "refId": "A", "legendFormat": "{{backend_addr}}" }],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
+    },
+    { "id": 27, "type": "row", "title": "Maglev Table Regeneration", "collapsed": false, "gridPos": { "x": 0, "y": 60, "w": 24, "h": 1 }, "panels": [] },
+    {
+      "id": 28, "type": "timeseries", "title": "Table generation",
+      "gridPos": { "x": 0, "y": 61, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "maglev_lb_table_generation", "refId": "A", "legendFormat": "generation" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 29, "type": "timeseries", "title": "Table regeneration duration",
+      "gridPos": { "x": 12, "y": 61, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "maglev_lb_table_regen_last_microseconds", "refId": "A", "legendFormat": "last regen" }],
+      "fieldConfig": { "defaults": { "unit": "µs", "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true, "pointSize": 6, "showPoints": "always" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    { "id": 30, "type": "row", "title": "Viewer Traffic (client-side)", "collapsed": false, "gridPos": { "x": 0, "y": 69, "w": 24, "h": 1 }, "panels": [] },
+    {
+      "id": 31, "type": "stat", "title": "Sessions started (total)",
+      "gridPos": { "x": 0, "y": 70, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "viewer_sessions_started_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 32, "type": "stat", "title": "TTFB p50 / p99",
+      "description": "Time-to-first-byte: connection open through the Maglev lookup and GRE forward of the first data segment - a proxy for LB-added latency.",
+      "gridPos": { "x": 6, "y": 70, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [
+        { "expr": "viewer_ttfb_seconds{quantile=\"0.5\"}", "refId": "A", "legendFormat": "p50" },
+        { "expr": "viewer_ttfb_seconds{quantile=\"0.99\"}", "refId": "B", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "orientation": "horizontal" }
+    },
+    {
+      "id": 33, "type": "stat", "title": "Sessions completed (total)",
+      "gridPos": { "x": 12, "y": 70, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum(viewer_sessions_completed_total)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 34, "type": "stat", "title": "Bytes received (total, client-side)",
+      "gridPos": { "x": 18, "y": 70, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "viewer_bytes_received_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "bytes", "decimals": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 35, "type": "timeseries", "title": "Sessions completed rate, by outcome",
+      "description": "content_end = the simulated stream ended normally. server_closed_early = the backend vanished mid-stream (a crash) or the safety timeout hit. connect_error = couldn't even connect.",
+      "gridPos": { "x": 0, "y": 74, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "sum by (outcome) (rate(viewer_sessions_completed_total[1m]))", "refId": "A", "legendFormat": "{{outcome}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 25, "spanNulls": true, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 36, "type": "timeseries", "title": "Time-to-first-byte percentiles",
+      "gridPos": { "x": 12, "y": 74, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [
+        { "expr": "viewer_ttfb_seconds{quantile=\"0.5\"}", "refId": "A", "legendFormat": "p50" },
+        { "expr": "viewer_ttfb_seconds{quantile=\"0.9\"}", "refId": "B", "legendFormat": "p90" },
+        { "expr": "viewer_ttfb_seconds{quantile=\"0.99\"}", "refId": "C", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 37, "type": "timeseries", "title": "Active viewer sessions over time",
+      "gridPos": { "x": 0, "y": 82, "w": 24, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-bench" },
+      "targets": [{ "expr": "viewer_active_sessions", "refId": "A", "legendFormat": "active sessions" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    }
+  ]
+}

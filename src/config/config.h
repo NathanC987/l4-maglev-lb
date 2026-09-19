@@ -7,6 +7,7 @@
 
 #define CONFIG_MAX_BACKENDS 64u
 #define CONFIG_IFACE_LEN 16u
+#define CONFIG_ADMIN_FIFO_LEN 256u
 
 struct config_backend {
     uint32_t addr; /* opaque network-byte-order IPv4 */
@@ -30,6 +31,12 @@ struct config {
 
     bool tui_enabled;
     uint16_t metrics_port; /* host byte order; 0 disables the Prometheus exporter */
+
+    /* Path to a named pipe (FIFO) the health checker thread polls for admin
+     * commands ("DRAIN <id>" / "UNDRAIN <id>"); empty string (the default)
+     * disables admin control entirely - same "off unless asked for" pattern
+     * as metrics_port==0. See docs/draining.md. */
+    char admin_fifo[CONFIG_ADMIN_FIFO_LEN];
 };
 
 /* Parses argv via getopt_long. Returns 0 if out is ready to use, 1 if --help

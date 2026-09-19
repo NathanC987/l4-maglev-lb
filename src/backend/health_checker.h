@@ -6,11 +6,20 @@
 #include "../stats/stats_registry.h"
 #include "backend_manager.h"
 
+#define HEALTH_CHECKER_ADMIN_FIFO_LEN 256u
+
 struct health_check_cfg {
     uint32_t interval_ms;
     uint32_t timeout_ms;
     uint32_t rise; /* consecutive successes required to go healthy */
     uint32_t fall; /* consecutive failures required to go unhealthy */
+
+    /* Path to a named pipe (already created via mkfifo(1) by the caller) the
+     * health checker thread polls, alongside its probe rounds, for admin
+     * commands: one command per line, "DRAIN <backend_id>" or "UNDRAIN
+     * <backend_id>". Empty string disables admin control - the thread never
+     * opens or polls anything. See docs/draining.md. */
+    char admin_fifo[HEALTH_CHECKER_ADMIN_FIFO_LEN];
 };
 
 struct health_checker;

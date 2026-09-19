@@ -9,15 +9,17 @@ load balancer entirely on the return path.
 See [`docs/architecture.md`](docs/architecture.md) for how it's put together,
 [`docs/maglev-algorithm.md`](docs/maglev-algorithm.md) for the consistent-hashing
 algorithm, [`docs/testing-topology.md`](docs/testing-topology.md) for the netns/veth
-test environment, and [`docs/roadmap.md`](docs/roadmap.md) for what's built and what's
-next.
+test environment, [`docs/draining.md`](docs/draining.md) for graceful backend removal,
+[`docs/benchmarking.md`](docs/benchmarking.md) for the benchmarking harness, and
+[`docs/roadmap.md`](docs/roadmap.md) for what's built and what's next.
 
 ## Status
 
 - **M1** (thin end-to-end datapath), **M2** (active health checking + live table
-  regeneration), and **M3** (ncurses TUI) are done and verified. A Prometheus exporter
-  and Grafana dashboard (see [`monitoring/`](monitoring/)) followed as a bonus round
-  before M4. See the roadmap doc for details.
+  regeneration), **M3** (ncurses TUI), a Prometheus/Grafana visualization round, and
+  **M4** (a backend-draining feature plus a benchmarking harness - see
+  [Benchmarking](#benchmarking) below) are done and verified. See the roadmap doc for
+  details.
 
 ## Requirements
 
@@ -26,6 +28,8 @@ next.
 - `pthread` (part of glibc on modern systems)
 - For the test topology: `iproute2`, `nftables`, `python3`, `ethtool`
 - Root, for anything that touches raw sockets or network namespaces
+- For the pps-ceiling benchmark specifically: a kernel with `pktgen` (`modprobe
+  pktgen`) and, optionally, `perf` for CPU accounting
 
 ## Building
 
@@ -78,6 +82,26 @@ Grafana on http://localhost:3000 has the dashboard loaded already. See
 [`monitoring/README.md`](monitoring/README.md) for what's on it and how the containers
 reach into the netns topology.
 
+## Benchmarking
+
+A separate, larger topology (`scripts/bench/`) simulates a Netflix-style streaming
+workload - many concurrent long-lived sessions, asymmetric bandwidth (small requests,
+large paced responses), and scripted backend crash / graceful-drain / scale-out
+events - plus a set of fast, fixed-parameter controlled benchmarks (flow-churn, raw
+pps ceiling via `pktgen`, and a Maglev-vs-naive-modulo disruption-percentage report).
+
+```sh
+sudo scripts/bench/demo/run-streaming-demo.sh          # the live, ~9-minute scenario
+sudo scripts/bench/controlled/run-crash-vs-drain-test.sh
+sudo scripts/bench/controlled/run-churn-test.sh
+sudo scripts/bench/controlled/run-pps-ceiling-test.sh
+scripts/bench/controlled/remap-report.sh                # no root needed
+```
+
+See [`docs/benchmarking.md`](docs/benchmarking.md) for what each one does, why the
+default parameters are what they are, and how to watch the demo live on its own
+Grafana dashboard.
+
 ## Project layout
 
 ```
@@ -94,6 +118,8 @@ src/
 test/unit/         CTest binaries for the modules above
 test/integration/  Python test clients driven from scripts/run-*-test.sh
 scripts/           Netns/veth topology setup and orchestration scripts
-monitoring/        Prometheus + Grafana docker-compose stack and dashboard
-docs/              Architecture, algorithm, topology, and roadmap notes
+scripts/bench/     The benchmark topology, controlled/ tests, and the demo/ scenario
+tools/             Standalone analysis binaries (maglev_remap_report)
+monitoring/        Prometheus + Grafana docker-compose stack and dashboards
+docs/              Architecture, algorithm, topology, draining, benchmarking, roadmap
 ```

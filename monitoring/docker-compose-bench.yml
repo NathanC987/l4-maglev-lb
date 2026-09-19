@@ -1,0 +1,30 @@
+# Additive overlay, not a replacement: brings up a SECOND, independent
+# Prometheus instance scraping the bench topology (10.98.0.0/24), reusing
+# the existing Grafana container from docker-compose.yml rather than
+# redefining it. Run both files together:
+#
+#   docker compose -f monitoring/docker-compose.yml -f monitoring/docker-compose-bench.yml up -d
+#
+# Kept separate from docker-compose.yml/prometheus.yml deliberately: the
+# base dashboard's PromQL has no job=/instance= filters (it assumes exactly
+# one scrape target), so adding a second target to that SAME Prometheus
+# instance would make its panels ambiguous the moment both topologies are
+# up together. Two independent Prometheus instances, two independent
+# Grafana datasources/dashboards, zero risk to the already-verified base
+# dashboard. See docs/benchmarking.md.
+services:
+  prometheus-bench:
+    image: prom/prometheus:latest
+    container_name: maglev-lb-prometheus-bench
+    network_mode: host
+    volumes:
+      - ./prometheus-bench.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-bench-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=:9091
+    restart: unless-stopped
+
+volumes:
+  prometheus-bench-data:

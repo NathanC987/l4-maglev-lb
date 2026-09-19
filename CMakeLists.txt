@@ -48,5 +48,18 @@ target_link_libraries(maglev-lb PRIVATE l4mlb_warnings ${XXHASH_LIBRARIES} ${NCU
                        Threads::Threads)
 target_link_directories(maglev-lb PRIVATE ${XXHASH_LIBRARY_DIRS} ${NCURSES_LIBRARY_DIRS})
 
+# Standalone benchmarking/analysis tools - not part of the maglev-lb binary
+# itself, but built against its real, already-tested source (never a
+# reimplementation), so they can never silently drift from what maglev-lb
+# actually does. See docs/benchmarking.md.
+add_executable(maglev_remap_report
+    tools/maglev_remap_report.c
+    src/maglev/hash.c
+    src/maglev/maglev_table.c
+)
+target_include_directories(maglev_remap_report PRIVATE src ${XXHASH_INCLUDE_DIRS})
+target_link_libraries(maglev_remap_report PRIVATE l4mlb_warnings ${XXHASH_LIBRARIES})
+target_link_directories(maglev_remap_report PRIVATE ${XXHASH_LIBRARY_DIRS})
+
 enable_testing()
 add_subdirectory(test/unit)

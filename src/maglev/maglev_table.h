@@ -53,11 +53,21 @@ void maglev_table_free(struct maglev_table *t);
  * -1 if no backend was available when the table was built. */
 int32_t maglev_table_lookup(const struct maglev_table *t, const struct flow_key *key);
 
-/* Builds a routing_snapshot: generates the table and takes an owned copy of
- * backends, so the caller's array can be freed/reused afterward. Returns
- * NULL on allocation failure. */
-struct routing_snapshot *routing_snapshot_create(const struct backend_view *backends, size_t n,
-                                                   uint32_t m, uint64_t generation);
+/* Builds a routing_snapshot: generates the table from `candidates` (the
+ * backends allowed to receive NEW slots - see maglev_table_generate()), then
+ * takes an owned copy of the (usually larger) `routable` set as the
+ * snapshot's resolvable backend array, so a flow already pinned via
+ * conntrack to a backend that's routable-but-not-a-candidate (draining)
+ * still resolves via routing_snapshot_find_backend(). `candidates` must be a
+ * subset of `routable` by id - table slot values are backend ids, not array
+ * indices, so this works without any change to maglev_table_generate()
+ * itself. Both input arrays may be freed/reused by the caller afterward.
+ * Returns NULL on allocation failure. */
+struct routing_snapshot *routing_snapshot_create(const struct backend_view *routable,
+                                                   size_t n_routable,
+                                                   const struct backend_view *candidates,
+                                                   size_t n_candidates, uint32_t m,
+                                                   uint64_t generation);
 void routing_snapshot_free(struct routing_snapshot *snap);
 
 /* Linear scan for the backend_view matching backend_id within snap. n_backends

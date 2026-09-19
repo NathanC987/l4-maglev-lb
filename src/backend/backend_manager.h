@@ -36,16 +36,41 @@ bool backend_manager_set_health(struct backend_manager *bm, uint32_t id, bool he
 void backend_manager_set_mac(struct backend_manager *bm, uint32_t id,
                               const uint8_t mac[ETH_ADDR_LEN]);
 
+/* Sets backend id's admin_state (BACKEND_ENABLED / BACKEND_DRAINING /
+ * BACKEND_DISABLED) - an operator-driven state, independent of `healthy`
+ * (which only the health checker ever writes). DRAINING keeps the backend
+ * in backend_manager_snapshot_routable()'s output (so flows already pinned
+ * to it via conntrack keep resolving) while removing it from
+ * backend_manager_snapshot_eligible()'s output (so it receives no new
+ * Maglev table slots). DISABLED removes it from both, same as unhealthy.
+ * Returns true if this actually changed the state, false if id was unknown
+ * or already at `state`. Triggers the subscribed callback only when
+ * something changed. */
+bool backend_manager_set_admin_state(struct backend_manager *bm, uint32_t id,
+                                      enum backend_admin_state state);
+
 /* Registers the (single, for v1) subscriber invoked after any add / remove /
  * health / mac change. Invoked synchronously, after the internal lock has
  * been released (never call this while holding a lock that could deadlock
  * against a reentrant backend_manager_* call from within the callback). */
 void backend_manager_subscribe(struct backend_manager *bm, backend_change_cb cb, void *ctx);
 
-/* Copies up to out_cap backends eligible for routing (admin_state ==
- * BACKEND_ENABLED && healthy && mac_resolved) into out. Returns the count
- * copied. */
+/* Copies up to out_cap backends eligible for NEW flow assignment
+ * (admin_state == BACKEND_ENABLED && healthy && mac_resolved) into out.
+ * This is the candidate set table_generator passes into Maglev's populate
+ * step - a DRAINING backend never appears here, so it receives zero new
+ * table slots. Returns the count copied. */
 size_t backend_manager_snapshot_eligible(struct backend_manager *bm, struct backend *out,
+                                          size_t out_cap);
+
+/* Copies up to out_cap backends that should remain resolvable for flows
+ * ALREADY pinned to them via conntrack (admin_state != BACKEND_DISABLED &&
+ * healthy && mac_resolved) into out - this is a superset of
+ * backend_manager_snapshot_eligible()'s output: it also includes
+ * BACKEND_DRAINING backends, which get no new slots but must stay
+ * resolvable so their existing flows aren't disrupted by the mere act of
+ * draining. Returns the count copied. */
+size_t backend_manager_snapshot_routable(struct backend_manager *bm, struct backend *out,
                                           size_t out_cap);
 
 /* Copies ALL backends regardless of eligibility (e.g. for a startup ARP

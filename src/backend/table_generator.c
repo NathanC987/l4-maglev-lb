@@ -66,21 +66,35 @@ static uint64_t now_us(void) {
     return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
 }
 
-int table_generator_rebuild_and_install(struct table_generator *tg) {
-    struct backend eligible[BACKEND_MAX];
-    size_t n = backend_manager_snapshot_eligible(tg->bm, eligible, BACKEND_MAX);
-
-    struct backend_view views[BACKEND_MAX];
+static void copy_views(const struct backend *in, size_t n, struct backend_view *out) {
     for (size_t i = 0; i < n; i++) {
-        views[i].id = eligible[i].id;
-        views[i].addr = eligible[i].addr;
-        views[i].port = eligible[i].port;
-        memcpy(views[i].mac, eligible[i].mac, ETH_ADDR_LEN);
+        out[i].id = in[i].id;
+        out[i].addr = in[i].addr;
+        out[i].port = in[i].port;
+        memcpy(out[i].mac, in[i].mac, ETH_ADDR_LEN);
     }
+}
+
+int table_generator_rebuild_and_install(struct table_generator *tg) {
+    /* routable: everyone a conntrack-pinned flow may still resolve to
+     * (includes DRAINING backends). eligible: candidates for NEW Maglev
+     * table slots (excludes DRAINING, same set this function used
+     * exclusively before draining existed). eligible is always a subset of
+     * routable by id - see routing_snapshot_create()'s contract. */
+    struct backend routable[BACKEND_MAX];
+    size_t n_routable = backend_manager_snapshot_routable(tg->bm, routable, BACKEND_MAX);
+    struct backend eligible[BACKEND_MAX];
+    size_t n_eligible = backend_manager_snapshot_eligible(tg->bm, eligible, BACKEND_MAX);
+
+    struct backend_view routable_views[BACKEND_MAX];
+    copy_views(routable, n_routable, routable_views);
+    struct backend_view eligible_views[BACKEND_MAX];
+    copy_views(eligible, n_eligible, eligible_views);
 
     uint64_t new_generation = atomic_load_explicit(&tg->generation, memory_order_relaxed) + 1;
     uint64_t start = now_us();
-    struct routing_snapshot *new_snap = routing_snapshot_create(views, n, tg->m, new_generation);
+    struct routing_snapshot *new_snap = routing_snapshot_create(
+        routable_views, n_routable, eligible_views, n_eligible, tg->m, new_generation);
     if (new_snap == NULL) {
         return -1;
     }
@@ -91,8 +105,10 @@ int table_generator_rebuild_and_install(struct table_generator *tg) {
     atomic_store_explicit(&tg->generation, new_generation, memory_order_relaxed);
     atomic_store_explicit(&tg->last_regen_us, elapsed, memory_order_relaxed);
     fprintf(stderr,
-            "table_generator: regenerated (generation=%llu, %zu eligible backend(s), %llu us)\n",
-            (unsigned long long)new_generation, n, (unsigned long long)elapsed);
+            "table_generator: regenerated (generation=%llu, %zu routable, %zu eligible for new "
+            "flows, %llu us)\n",
+            (unsigned long long)new_generation, n_routable, n_eligible,
+            (unsigned long long)elapsed);
 
     if (old != NULL) {
         pthread_mutex_lock(&tg->retired_mu);

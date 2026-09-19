@@ -109,6 +109,24 @@ bool backend_manager_set_health(struct backend_manager *bm, uint32_t id, bool he
     return changed;
 }
 
+bool backend_manager_set_admin_state(struct backend_manager *bm, uint32_t id,
+                                      enum backend_admin_state state) {
+    bool changed = false;
+
+    pthread_mutex_lock(&bm->mu);
+    struct backend *b = find_slot(bm, id);
+    if (b != NULL && b->admin_state != state) {
+        b->admin_state = state;
+        changed = true;
+    }
+    pthread_mutex_unlock(&bm->mu);
+
+    if (changed) {
+        notify(bm);
+    }
+    return changed;
+}
+
 void backend_manager_set_mac(struct backend_manager *bm, uint32_t id,
                               const uint8_t mac[ETH_ADDR_LEN]) {
     bool changed = false;
@@ -144,6 +162,24 @@ size_t backend_manager_snapshot_eligible(struct backend_manager *bm, struct back
         }
         struct backend *b = &bm->backends[i];
         if (b->admin_state == BACKEND_ENABLED && atomic_load(&b->healthy) &&
+            atomic_load(&b->mac_resolved)) {
+            out[n++] = *b;
+        }
+    }
+    pthread_mutex_unlock(&bm->mu);
+    return n;
+}
+
+size_t backend_manager_snapshot_routable(struct backend_manager *bm, struct backend *out,
+                                          size_t out_cap) {
+    size_t n = 0;
+    pthread_mutex_lock(&bm->mu);
+    for (size_t i = 0; i < BACKEND_MAX && n < out_cap; i++) {
+        if (!bm->slot_used[i]) {
+            continue;
+        }
+        struct backend *b = &bm->backends[i];
+        if (b->admin_state != BACKEND_DISABLED && atomic_load(&b->healthy) &&
             atomic_load(&b->mac_resolved)) {
             out[n++] = *b;
         }

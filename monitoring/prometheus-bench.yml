@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: maglev-lb-bench
+    static_configs:
+      - targets: ["10.98.0.1:9105"]
+        labels:
+          instance: bench-lb
+
+  - job_name: viewer-bench
+    static_configs:
+      - targets: ["10.98.0.2:9106"]
+        labels:
+          instance: bench-viewer
