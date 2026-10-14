@@ -37,6 +37,7 @@ void stats_backend_flow_opened(struct lb_stats *s, uint32_t backend_id) {
         return;
     }
     atomic_fetch_add_explicit(&s->backends[backend_id].active_flows, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&s->backends[backend_id].flows_assigned, 1, memory_order_relaxed);
 }
 
 void stats_backend_flow_closed(struct lb_stats *s, uint32_t backend_id) {
@@ -80,6 +81,7 @@ void stats_registry_snapshot_backend(const struct lb_stats *s, uint32_t backend_
     out->packets = atomic_load_explicit(&b->packets, memory_order_relaxed);
     out->bytes = atomic_load_explicit(&b->bytes, memory_order_relaxed);
     out->active_flows = atomic_load_explicit(&b->active_flows, memory_order_relaxed);
+    out->flows_assigned = atomic_load_explicit(&b->flows_assigned, memory_order_relaxed);
     out->health_check_failures =
         atomic_load_explicit(&b->health_check_failures, memory_order_relaxed);
 }

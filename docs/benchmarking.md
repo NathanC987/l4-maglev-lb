@@ -90,8 +90,8 @@ collide with the M1-M3 topology. `scripts/bench/setup-bench-netns.sh` deliberate
   without this, early sessions could get routed to a backend nothing is listening on.
 - **The 120s conntrack idle timeout is a hard floor on proving reaper behavior.**
   Conntrack has no FIN/RST awareness at all (`src/conntrack/conntrack.h`) - a flow's
-  slot is reclaimed only after `TCP_IDLE_TIMEOUT_NS` (120s, hardcoded in `src/main.c`)
-  of idleness, regardless of how quickly the TCP connection itself actually closed.
+  slot is reclaimed only after the TCP idle timeout (`--ct-tcp-timeout-ms`, default
+  120s, which every bench script here uses) of idleness, regardless of how quickly the TCP connection itself actually closed.
   This means `maglev_lb_conntrack_active_flows` stays high for a couple of minutes
   after traffic stops - **that's correct, not a bug** - and it's why
   `run-streaming-demo.sh`'s cool-down phase is `BENCH_COOLDOWN_S=150` (not 30 or 60):

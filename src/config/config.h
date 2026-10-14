@@ -29,6 +29,11 @@ struct config {
     uint32_t hc_rise;
     uint32_t hc_fall;
 
+    /* Conntrack idle timeouts. Conntrack has no FIN/RST awareness, so these
+     * are the ONLY way a flow's slot is ever reclaimed. */
+    uint32_t ct_tcp_timeout_ms;
+    uint32_t ct_udp_timeout_ms;
+
     bool tui_enabled;
     uint16_t metrics_port; /* host byte order; 0 disables the Prometheus exporter */
 

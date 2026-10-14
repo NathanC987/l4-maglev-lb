@@ -127,6 +127,36 @@ already-pinned flow happens to race the (typically sub-second) detection window.
 controlled crash-vs-drain comparison treats that as a soft note rather than a hard
 assertion, and it's documented in `docs/benchmarking.md` rather than papered over.
 
+## Live mode (done)
+
+The streaming demo and Grafana are accurate but hard to read for a newcomer, so
+live mode puts the system on an interactive canvas: a fork of breakscale, a
+frontend-only system-design simulator, whose simulator is swapped for a bridge to
+the real system. Full details in `docs/live-mode.md`.
+
+- **`bridge/`** (Python stdlib, runs as root on 127.0.0.1 with a token): reconciles
+  the canvas's desired design onto a 16-slot bench topology, runs `maglev-lb`, one
+  `service_server.py` per backend (configured capacity, gamma service time, queue,
+  shed) and one `load_client.py` per client (open-loop Poisson, optional pooled
+  connections), and streams merged measurements at 4 Hz. Faults are real: SIGKILL,
+  slowdown, error rate, `gre1` down for a gray-failure partition, admin-FIFO drain.
+- **Two small C changes:** `--ct-tcp-timeout-ms` / `--ct-udp-timeout-ms` (defaults
+  unchanged; live mode uses 15 s so conntrack's flow count means something at
+  hundreds of short connections per second), and a per-backend cumulative
+  `flows_assigned` counter exported as `maglev_lb_backend_flows_assigned_total`,
+  the LB's own record of where it sent new flows.
+- **Verified** by `bridge/tests/` (no root), `scripts/live/run-live-smoke-test.sh`
+  (security rules, crash/slow/partition/drain, 1000 rps, pooled connections, slot
+  removal, no orphans after `kill -9`), and the fork's tests against frames
+  recorded from the real bridge.
+
+Two things only showed up by running it end to end: fire-and-forget asyncio tasks
+were being garbage-collected mid-flight (the loop holds only weak references), which
+froze stats and stranded requests until every background task went through a helper
+that keeps a strong reference; and tick-based `/proc/<pid>/stat` CPU accounting read
+the lightly loaded datapath as exactly 0%, so the bridge reads nanosecond
+`schedstat` instead.
+
 ## M5 - eBPF/XDP fast path (stretch)
 
 Reuse `backend_manager`/`health_checker`/`table_generator` unchanged as the control

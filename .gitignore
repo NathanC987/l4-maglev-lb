@@ -6,5 +6,6 @@ compile_commands.json
 .cache/
 scripts/.run/
 scripts/bench/.run/
+bridge/.run/
 __pycache__/
 *.pyc

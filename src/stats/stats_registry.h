@@ -9,6 +9,7 @@ struct per_backend_stats {
     _Atomic uint64_t packets;
     _Atomic uint64_t bytes;
     _Atomic uint64_t active_flows;
+    _Atomic uint64_t flows_assigned; /* cumulative; never decremented, unlike active_flows */
     _Atomic uint64_t health_check_failures;
 };
 
@@ -55,7 +56,7 @@ void stats_backend_flow_closed(struct lb_stats *s, uint32_t backend_id);
 void stats_backend_health_check_failed(struct lb_stats *s, uint32_t backend_id);
 
 struct per_backend_stats_snapshot {
-    uint64_t packets, bytes, active_flows, health_check_failures;
+    uint64_t packets, bytes, active_flows, flows_assigned, health_check_failures;
 };
 
 struct lb_stats_snapshot {

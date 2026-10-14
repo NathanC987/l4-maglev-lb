@@ -10,7 +10,8 @@ See [`docs/architecture.md`](docs/architecture.md) for how it's put together,
 [`docs/maglev-algorithm.md`](docs/maglev-algorithm.md) for the consistent-hashing
 algorithm, [`docs/testing-topology.md`](docs/testing-topology.md) for the netns/veth
 test environment, [`docs/draining.md`](docs/draining.md) for graceful backend removal,
-[`docs/benchmarking.md`](docs/benchmarking.md) for the benchmarking harness, and
+[`docs/benchmarking.md`](docs/benchmarking.md) for the benchmarking harness,
+[`docs/live-mode.md`](docs/live-mode.md) for the interactive canvas, and
 [`docs/roadmap.md`](docs/roadmap.md) for what's built and what's next.
 
 ## Status
@@ -18,8 +19,9 @@ test environment, [`docs/draining.md`](docs/draining.md) for graceful backend re
 - **M1** (thin end-to-end datapath), **M2** (active health checking + live table
   regeneration), **M3** (ncurses TUI), a Prometheus/Grafana visualization round, and
   **M4** (a backend-draining feature plus a benchmarking harness - see
-  [Benchmarking](#benchmarking) below) are done and verified. See the roadmap doc for
-  details.
+  [Benchmarking](#benchmarking) below) are done and verified, plus a **live mode**: an
+  interactive canvas driving the real system (see [Live mode](#live-mode) below). See
+  the roadmap doc for details.
 
 ## Requirements
 
@@ -102,6 +104,26 @@ See [`docs/benchmarking.md`](docs/benchmarking.md) for what each one does, why t
 default parameters are what they are, and how to watch the demo live on its own
 Grafana dashboard.
 
+## Live mode
+
+A canvas you can build and break: place clients, the load balancer and backends,
+wire them up, set the offered load, and crash, slow, partition or drain backends
+while watching where the traffic goes. The frontend is a fork of
+[breakscale](https://github.com/xevrion/breakscale)
+([`NathanC987/breakscale`](https://github.com/NathanC987/breakscale), branch
+`live-mode`); here, `bridge/` runs the real `maglev-lb` and real client/backend
+processes behind it, so every number on the screen is measured.
+
+```sh
+(cd ../breakscale && npm ci && npm run build:live)
+sudo python3 bridge/live_bridge.py --static-dir ../breakscale/dist-live
+# open the http://127.0.0.1:8790/#token=... link it prints
+sudo scripts/live/run-live-smoke-test.sh     # end-to-end checks
+```
+
+See [`docs/live-mode.md`](docs/live-mode.md) for what is real versus configured,
+how the measurements map onto the canvas, the security model, and a demo walkthrough.
+
 ## Project layout
 
 ```
@@ -119,7 +141,9 @@ test/unit/         CTest binaries for the modules above
 test/integration/  Python test clients driven from scripts/run-*-test.sh
 scripts/           Netns/veth topology setup and orchestration scripts
 scripts/bench/     The benchmark topology, controlled/ tests, and the demo/ scenario
+scripts/live/      Live-mode smoke test
+bridge/            Live mode: HTTP bridge, reconciler, and the client/backend workload processes
 tools/             Standalone analysis binaries (maglev_remap_report)
 monitoring/        Prometheus + Grafana docker-compose stack and dashboards
-docs/              Architecture, algorithm, topology, draining, benchmarking, roadmap
+docs/              Architecture, algorithm, topology, draining, benchmarking, live mode, roadmap
 ```

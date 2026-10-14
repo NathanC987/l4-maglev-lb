@@ -9,7 +9,7 @@
 #
 # What this deliberately does NOT test: reaper EVICTION. conntrack has no
 # FIN/RST awareness (src/conntrack/conntrack.h) - a flow's slot is only
-# reclaimed after 120s of idleness (TCP_IDLE_TIMEOUT_NS in src/main.c),
+# reclaimed after 120s of idleness (--ct-tcp-timeout-ms's default),
 # regardless of how quickly the TCP connection itself actually closed. A
 # fast, repeatable controlled test can't honestly wait that long every run;
 # scripts/bench/demo/run-streaming-demo.sh's cool-down phase

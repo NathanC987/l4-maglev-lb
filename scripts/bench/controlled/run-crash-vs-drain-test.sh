@@ -157,8 +157,8 @@ echo "    drops_backend_unhealthy delta during drain:  $drain_drops_delta"
 
 # NOT waited for here: maglev_lb_backend_active_flows reaching zero.
 # conntrack has no FIN/RST awareness at all (src/conntrack/conntrack.h) - a
-# flow's slot is only reclaimed by the idle-timeout reaper, TCP_IDLE_TIMEOUT_NS
-# = 120s hardcoded in src/main.c, entirely independent of draining. So
+# flow's slot is only reclaimed by the idle-timeout reaper (--ct-tcp-timeout-ms,
+# default 120s, used here), entirely independent of draining. So
 # "fully drained" in the active-flows-count sense always takes >=120s
 # regardless of anything this test does - that's what
 # scripts/bench/demo/run-streaming-demo.sh's much longer cool-down phase is

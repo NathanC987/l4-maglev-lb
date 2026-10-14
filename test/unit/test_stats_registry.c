@@ -36,6 +36,7 @@ int main(void) {
     struct per_backend_stats_snapshot b1_after;
     stats_registry_snapshot_backend(&s, 1, &b1_after);
     assert(b1_after.active_flows == 1);
+    assert(b1_after.flows_assigned == 2); /* closing a flow must not decrement this */
     assert(b1_after.health_check_failures == 1);
 
     stats_registry_destroy(&s);

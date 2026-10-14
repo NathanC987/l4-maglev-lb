@@ -248,6 +248,21 @@ static void build_metrics_body(struct metrics_http *m, struct metrics_buf *b) {
                    (unsigned long long)bs.active_flows);
     }
 
+    mb_appendf(b, "# HELP maglev_lb_backend_flows_assigned_total New flows the datapath has "
+                  "pinned to this backend (conntrack inserts). A packet reusing an already-pinned "
+                  "5-tuple is not counted.\n");
+    mb_appendf(b, "# TYPE maglev_lb_backend_flows_assigned_total counter\n");
+    for (size_t i = 0; i < n; i++) {
+        char addr[16];
+        ipv4_format(backends[i].addr, addr, sizeof(addr));
+        struct per_backend_stats_snapshot bs;
+        stats_registry_snapshot_backend(m->cfg.stats, backends[i].id, &bs);
+        mb_appendf(b,
+                   "maglev_lb_backend_flows_assigned_total{backend_id=\"%u\",backend_addr=\"%s:%u\"} %llu\n",
+                   backends[i].id, addr, backends[i].port,
+                   (unsigned long long)bs.flows_assigned);
+    }
+
     mb_appendf(b, "# HELP maglev_lb_backend_health_check_failures_total Failed health-check "
                   "probes against this backend (every failure, not just threshold-crossing "
                   "ones).\n");

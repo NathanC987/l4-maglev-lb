@@ -51,7 +51,7 @@ void config_print_usage(const char *prog, FILE *stream) {
             "          [--ttl TTL] [--table-size M] [--max-flows N]\n"
             "          [--hc-interval-ms MS] [--hc-timeout-ms MS]\n"
             "          [--hc-rise N] [--hc-fall N] [--tui] [--metrics-port PORT]\n"
-            "          [--admin-fifo PATH]\n"
+            "          [--admin-fifo PATH] [--ct-tcp-timeout-ms MS] [--ct-udp-timeout-ms MS]\n"
             "\n"
             "  --iface        Interface the LB listens/sends on (single shared L2\n"
             "                 segment in v1's netns topology: client- and backend-facing)\n"
@@ -75,6 +75,10 @@ void config_print_usage(const char *prog, FILE *stream) {
             "  --admin-fifo   Path to a named pipe for admin commands (DRAIN <id> /\n"
             "                 UNDRAIN <id>); must already exist (mkfifo) - unset\n"
             "                 disables admin control entirely\n"
+            "  --ct-tcp-timeout-ms  Idle time before a TCP flow's conntrack entry is\n"
+            "                       reaped (default 120000; there is no FIN tracking, so\n"
+            "                       this is the only way an entry is ever freed)\n"
+            "  --ct-udp-timeout-ms  Same, for UDP flows (default 45000)\n"
             "  --help         Show this message\n",
             prog);
 }
@@ -89,7 +93,11 @@ enum {
     OPT_TUI = 1005,
     OPT_METRICS_PORT = 1006,
     OPT_ADMIN_FIFO = 1007,
+    OPT_CT_TCP_TIMEOUT_MS = 1008,
+    OPT_CT_UDP_TIMEOUT_MS = 1009,
 };
+
+#define CT_TIMEOUT_MAX_MS 3600000L
 
 int config_parse_args(int argc, char **argv, struct config *out) {
     memset(out, 0, sizeof(*out));
@@ -101,6 +109,8 @@ int config_parse_args(int argc, char **argv, struct config *out) {
     out->hc_rise = 2;
     out->hc_fall = 3;
     out->metrics_port = 9105;
+    out->ct_tcp_timeout_ms = 120000;
+    out->ct_udp_timeout_ms = 45000;
 
     static struct option long_opts[] = {
         {"iface", required_argument, NULL, 'i'},
@@ -117,6 +127,8 @@ int config_parse_args(int argc, char **argv, struct config *out) {
         {"tui", no_argument, NULL, OPT_TUI},
         {"metrics-port", required_argument, NULL, OPT_METRICS_PORT},
         {"admin-fifo", required_argument, NULL, OPT_ADMIN_FIFO},
+        {"ct-tcp-timeout-ms", required_argument, NULL, OPT_CT_TCP_TIMEOUT_MS},
+        {"ct-udp-timeout-ms", required_argument, NULL, OPT_CT_UDP_TIMEOUT_MS},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
     };
@@ -233,6 +245,23 @@ int config_parse_args(int argc, char **argv, struct config *out) {
         case OPT_ADMIN_FIFO:
             strncpy(out->admin_fifo, optarg, CONFIG_ADMIN_FIFO_LEN - 1);
             break;
+        case OPT_CT_TCP_TIMEOUT_MS:
+        case OPT_CT_UDP_TIMEOUT_MS: {
+            char *end = NULL;
+            long v = strtol(optarg, &end, 10);
+            if (end == optarg || *end != '\0' || v <= 0 || v > CT_TIMEOUT_MAX_MS) {
+                fprintf(stderr, "invalid --%s: %s (must be 1..%ld)\n",
+                        c == OPT_CT_TCP_TIMEOUT_MS ? "ct-tcp-timeout-ms" : "ct-udp-timeout-ms",
+                        optarg, CT_TIMEOUT_MAX_MS);
+                return -1;
+            }
+            if (c == OPT_CT_TCP_TIMEOUT_MS) {
+                out->ct_tcp_timeout_ms = (uint32_t)v;
+            } else {
+                out->ct_udp_timeout_ms = (uint32_t)v;
+            }
+            break;
+        }
         case 'h':
             config_print_usage(argv[0], stdout);
             return 1;

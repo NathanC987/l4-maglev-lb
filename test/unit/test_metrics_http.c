@@ -79,6 +79,9 @@ int main(void) {
     atomic_fetch_add_explicit(&stats.drops_no_backend, 3, memory_order_relaxed);
     stats_record_backend_packet(&stats, id1, 100);
     stats_backend_health_check_failed(&stats, id2);
+    stats_backend_flow_opened(&stats, id1);
+    stats_backend_flow_opened(&stats, id1);
+    stats_backend_flow_closed(&stats, id1);
 
     struct metrics_http_config cfg = {
         .port = TEST_PORT,
@@ -129,6 +132,13 @@ int main(void) {
              "backend_addr=\"10.0.0.12:9000\"} 1\n",
              id2);
     assert(strstr(resp, expect_hcfail2) != NULL);
+
+    char expect_assigned1[200];
+    snprintf(expect_assigned1, sizeof(expect_assigned1),
+             "maglev_lb_backend_flows_assigned_total{backend_id=\"%u\","
+             "backend_addr=\"10.0.0.11:9000\"} 2\n",
+             id1);
+    assert(strstr(resp, expect_assigned1) != NULL);
 
     metrics_http_stop(m);
     metrics_http_destroy(m);

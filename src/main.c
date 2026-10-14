@@ -25,8 +25,6 @@
 
 #define ARP_TIMEOUT_MS 2000
 #define REAPER_INTERVAL_MS 500
-#define TCP_IDLE_TIMEOUT_NS (120ULL * 1000000000ULL)
-#define UDP_IDLE_TIMEOUT_NS (45ULL * 1000000000ULL)
 #define TUI_REFRESH_MS 1000
 
 static void print_ip(const char *label, uint32_t addr_network_order) {
@@ -298,8 +296,8 @@ int main(int argc, char **argv) {
             .ct = ct,
             .stats = &stats,
             .reaper_interval_ms = REAPER_INTERVAL_MS,
-            .tcp_timeout_ns = TCP_IDLE_TIMEOUT_NS,
-            .udp_timeout_ns = UDP_IDLE_TIMEOUT_NS,
+            .tcp_timeout_ns = (uint64_t)cfg.ct_tcp_timeout_ms * 1000000ULL,
+            .udp_timeout_ns = (uint64_t)cfg.ct_udp_timeout_ms * 1000000ULL,
         };
         dp = datapath_create(&dp_cfg);
     }
