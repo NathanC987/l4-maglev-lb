@@ -3,6 +3,9 @@ function(l4mlb_unit_test name)
     target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src ${XXHASH_INCLUDE_DIRS})
     target_link_libraries(${name} PRIVATE l4mlb_warnings ${XXHASH_LIBRARIES} Threads::Threads)
     target_link_directories(${name} PRIVATE ${XXHASH_LIBRARY_DIRS})
+    # The tests do their setup and checks inside assert(), so keep it live even in
+    # Release builds (which define NDEBUG and would otherwise compile it away).
+    target_compile_options(${name} PRIVATE -UNDEBUG)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
