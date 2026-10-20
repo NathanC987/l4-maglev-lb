@@ -1,0 +1,709 @@
+{
+  "uid": "maglev-lb-aws-referee",
+  "title": "L4 Maglev — AWS as referee",
+  "id": null,
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "timezone": "",
+  "tags": [
+    "maglev",
+    "aws"
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "title": "Live dashboard",
+      "type": "link",
+      "url": "/d/maglev-lb-cloud"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 5
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**AWS as referee.** Every other panel in this project is the system measuring itself. These panels are measured by AWS: **CloudWatch EC2 metrics** (the hypervisor's own packet and byte counters for each host) and **VPC Flow Logs** (a record of every flow on every network interface). If maglev-lb's own counters, or the DSR claim, were wrong, these would disagree.\n\nCloudWatch delivers the LB's metrics every minute and the other hosts' every 5 minutes; flow logs arrive a few minutes late. Refresh is 1 min to keep CloudWatch API use at a few cents. Back to the [live dashboard](/d/maglev-lb-cloud)."
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Do the LB's own counters agree with AWS?",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "GRE packets the LB forwarded, per minute: maglev-lb's count vs AWS's",
+      "description": "maglev-lb counts each packet it encapsulates and sends to a backend. AWS counts every packet leaving the LB's network interface, which also includes the host's own traffic (health checks, SSH, Prometheus scrapes), so its line sits a small, steady amount above. The exact per-packet check is cloud/dsr-proof.sh, which counts only GRE in the VPC Flow Logs.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-cloud"
+          },
+          "expr": "sum(increase(maglev_lb_tx_packets_total[1m]))",
+          "legendFormat": "maglev-lb forwarded"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "NetworkPacketsOut",
+          "dimensions": {
+            "InstanceId": "__LB__"
+          },
+          "statistic": "Sum",
+          "period": "60",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "AWS: all packets out of the LB"
+        }
+      ],
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Bytes into and out of the LB, per minute (AWS)",
+      "description": "An LB on the reply path would send far more than it receives (the video). With DSR it sends about what it receives, plus a 24-byte GRE header per packet.",
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "cloudwatch"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "NetworkIn",
+          "dimensions": {
+            "InstanceId": "__LB__"
+          },
+          "statistic": "Sum",
+          "period": "60",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "in"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "NetworkOut",
+          "dimensions": {
+            "InstanceId": "__LB__"
+          },
+          "statistic": "Sum",
+          "period": "60",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "out"
+        }
+      ],
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "Is it really Direct Server Return?",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Bytes sent by each host, per 5 minutes (AWS)",
+      "description": "With DSR the video data goes from the backends straight to the client, so the backends send far more than the LB, which only forwards the client's requests and ACKs.",
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "cloudwatch"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "NetworkOut",
+          "dimensions": {
+            "InstanceId": "__LB__"
+          },
+          "statistic": "Sum",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "lb"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "NetworkOut",
+          "dimensions": {
+            "InstanceId": "__BE1__"
+          },
+          "statistic": "Sum",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "be1"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "NetworkOut",
+          "dimensions": {
+            "InstanceId": "__BE2__"
+          },
+          "statistic": "Sum",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "be2"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "NetworkOut",
+          "dimensions": {
+            "InstanceId": "__BE3__"
+          },
+          "statistic": "Sum",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "be3"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "NetworkOut",
+          "dimensions": {
+            "InstanceId": "__BE4__"
+          },
+          "statistic": "Sum",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "be4"
+        }
+      ],
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 2,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "VPC Flow Logs: what each host sent, and with what source address",
+      "description": "pktsrc is the source address written in the packets; proto 47 is GRE, 6 is TCP. The LB sends only GRE, from its own address. The backends send TCP whose source is the VIP 10.200.0.10: the replies, going straight to the client.",
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "cloudwatch"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 15,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Logs",
+          "region": "default",
+          "id": "",
+          "expression": "parse @message \"* * * * * * * * * * * * * * * * *\" as version, eni, instance, dir, srcaddr, dstaddr, pktsrc, pktdst, srcport, dstport, proto, packets, bytes, fstart, fend, action, status\n| filter dir = \"egress\" and action = \"ACCEPT\"\n| fields replace(replace(replace(replace(replace(replace(instance, \"__LB__\", \"lb\"), \"__CLIENT__\", \"client\"), \"__BE1__\", \"be1\"), \"__BE2__\", \"be2\"), \"__BE3__\", \"be3\"), \"__BE4__\", \"be4\") as host\n| stats sum(bytes) as bytes_sent, sum(packets) as packets_sent by host, proto, pktsrc\n| sort bytes_sent desc\n| limit 30",
+          "logGroups": [
+            {
+              "arn": "__LOG_GROUP_ARN__",
+              "name": "__LOG_GROUP__"
+            }
+          ],
+          "logGroupNames": [
+            "__LOG_GROUP__"
+          ],
+          "statsGroups": [
+            "host",
+            "proto",
+            "pktsrc"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bytes_sent"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Is the benchmark environment itself healthy?",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "CPU credit balance (burstable instances)",
+      "description": "A t2/t3 instance at zero credits is throttled to its baseline CPU, and any result measured then says more about AWS than about maglev-lb. cloud/ benchmarks refuse to start when the LB or client is low.",
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "cloudwatch"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "CPUCreditBalance",
+          "dimensions": {
+            "InstanceId": "__LB__"
+          },
+          "statistic": "Average",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "lb"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "CPUCreditBalance",
+          "dimensions": {
+            "InstanceId": "__CLIENT__"
+          },
+          "statistic": "Average",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "client"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "CPUCreditBalance",
+          "dimensions": {
+            "InstanceId": "__BE1__"
+          },
+          "statistic": "Average",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "be1"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "CPUCreditBalance",
+          "dimensions": {
+            "InstanceId": "__BE2__"
+          },
+          "statistic": "Average",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "be2"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "CPUCreditBalance",
+          "dimensions": {
+            "InstanceId": "__BE3__"
+          },
+          "statistic": "Average",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "be3"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "CPUCreditBalance",
+          "dimensions": {
+            "InstanceId": "__BE4__"
+          },
+          "statistic": "Average",
+          "period": "300",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "be4"
+        }
+      ],
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "LB CPU: AWS's view",
+      "description": "CloudWatch CPUUtilization of the LB instance (all its vCPUs). maglev-lb's datapath is one thread, so on a 2-vCPU instance it can use at most 50% of this.",
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "cloudwatch"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "region": "default",
+          "namespace": "AWS/EC2",
+          "metricName": "CPUUtilization",
+          "dimensions": {
+            "InstanceId": "__LB__"
+          },
+          "statistic": "Average",
+          "period": "60",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "id": "",
+          "expression": "",
+          "label": "lb"
+        }
+      ],
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ]
+}

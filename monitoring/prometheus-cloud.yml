@@ -1,0 +1,19 @@
+# Scrape targets on the AWS deployment (fixed private addresses from
+# cloud/stack.yaml). Same metric names as the local bench topology, so the
+# cloud dashboard reuses the bench dashboard's panels.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: maglev-lb-cloud
+    static_configs:
+      - targets: ["10.99.1.20:9105"]
+        labels:
+          instance: cloud-lb
+
+  - job_name: viewer-cloud
+    static_configs:
+      - targets: ["10.99.1.10:9106"]
+        labels:
+          instance: cloud-client

@@ -1,0 +1,45 @@
+# Prometheus + Grafana for the AWS deployment (cloud/), run on the stack's mon
+# host by cloud/deploy.sh - not on your laptop. Separate from the local
+# docker-compose*.yml so the local dashboards never see a CloudWatch datasource
+# they cannot reach. Grafana listens on 127.0.0.1 only; reach it through
+# cloud/grafana-tunnel.sh. See docs/cloud.md.
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: maglev-lb-prometheus-cloud
+    network_mode: host
+    volumes:
+      - ./prometheus-cloud.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-cloud-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2d
+      - --web.listen-address=127.0.0.1:9090
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: maglev-lb-grafana-cloud
+    network_mode: host
+    environment:
+      - GF_SERVER_HTTP_ADDR=127.0.0.1
+      - GF_SERVER_HTTP_PORT=3000
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:?set by cloud/deploy.sh}
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      # Read by the CloudWatch datasource provisioning file.
+      - AWS_REGION=${AWS_REGION:?set by cloud/deploy.sh}
+    volumes:
+      - ./grafana-cloud/provisioning:/etc/grafana/provisioning:ro
+      - ${DASHBOARD_DIR:?set by cloud/deploy.sh}:/var/lib/grafana/dashboards:ro
+      - grafana-cloud-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus-cloud-data:
+  grafana-cloud-data:

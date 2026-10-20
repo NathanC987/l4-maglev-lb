@@ -9,3 +9,5 @@ scripts/bench/.run/
 bridge/.run/
 __pycache__/
 *.pyc
+cloud/.run/
+cloud/results/
