@@ -51,11 +51,15 @@ for_all install_pkgs "${ROLES[@]}"
 
 echo "==> Shipping the working tree"
 tarball="$RUN_DIR/src.tgz"
-(cd "$REPO_ROOT" && git ls-files -co --exclude-standard -z \
+# Documents and images stay behind: no host uses them, and they would make the
+# upload 20x bigger, which on a slow uplink (a phone hotspot) times out.
+(cd "$REPO_ROOT" && git ls-files -co --exclude-standard -z -- . \
+        ':!report' ':!*.pdf' ':!*.docx' ':!*.png' ':!*.jpg' \
     | tar --null --ignore-failed-read -T - -czf "$tarball")
 ship() {
     local r=$1
-    scp_to "$r" "$tarball" /tmp/l4mlb-src.tgz
+    # One retry: a dropped connection on a flaky link should not fail the deploy.
+    scp_to "$r" "$tarball" /tmp/l4mlb-src.tgz || { sleep 5; scp_to "$r" "$tarball" /tmp/l4mlb-src.tgz; }
     ssh_to "$r" "rm -rf ~/$REMOTE_REPO && mkdir -p ~/$REMOTE_REPO ~/$REMOTE_RUN && \
         tar -xzf /tmp/l4mlb-src.tgz -C ~/$REMOTE_REPO && rm /tmp/l4mlb-src.tgz"
 }
