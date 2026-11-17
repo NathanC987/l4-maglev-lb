@@ -10,7 +10,8 @@
 # --measured-type is for lb and client, --instance-type for the rest. Options
 # default to the values of the previous run (.run/params.env), then to full /
 # t3.micro / c7i-flex.large / standard / on / 240. SSH is opened to your current public IP
-# only (override with L4MLB_ADMIN_CIDR=a.b.c.d/32).
+# only; some networks alternate between two, and both are opened then (override with
+# L4MLB_ADMIN_CIDR=a.b.c.d/32, or two separated by a comma).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -65,10 +66,21 @@ fi
 
 ADMIN_CIDR="${L4MLB_ADMIN_CIDR:-}"
 if [[ -z "$ADMIN_CIDR" ]]; then
-    my_ip="$(curl -fsS --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]')" \
-        || die "could not detect your public IP; set L4MLB_ADMIN_CIDR=a.b.c.d/32"
-    ADMIN_CIDR="$my_ip/32"
+    # Some NATs send each connection out through one of several public IPs, so a
+    # single lookup can miss the one SSH will use. Ask a few times.
+    my_ips=()
+    for _ in 1 2 3 4 5 6; do
+        ip="$(curl -fsS --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]')" || continue
+        [[ " ${my_ips[*]} " == *" $ip "* ]] || my_ips+=("$ip")
+    done
+    [[ ${#my_ips[@]} -gt 0 ]] || die "could not detect your public IP; set L4MLB_ADMIN_CIDR=a.b.c.d/32"
+    [[ ${#my_ips[@]} -le 2 ]] \
+        || die "this network uses ${#my_ips[@]} public IPs (${my_ips[*]}); set L4MLB_ADMIN_CIDR to a range covering them, or use another network"
+    ADMIN_CIDR="$(printf '%s/32,' "${my_ips[@]}")"
+    ADMIN_CIDR="${ADMIN_CIDR%,}"
 fi
+IFS=, read -r ADMIN_CIDR_1 ADMIN_CIDR_2 ADMIN_CIDR_EXTRA <<<"$ADMIN_CIDR"
+[[ -z "${ADMIN_CIDR_EXTRA:-}" ]] || die "L4MLB_ADMIN_CIDR takes at most two ranges"
 
 cat >"$RUN_DIR/params.env" <<EOF
 PROFILE=$PROFILE
@@ -88,7 +100,7 @@ aws cloudformation deploy \
     --no-fail-on-empty-changeset \
     --tags project=l4-maglev-lb \
     --parameter-overrides \
-        "KeyName=$KEY_NAME" "AdminCidr=$ADMIN_CIDR" "Profile=$PROFILE" \
+        "KeyName=$KEY_NAME" "AdminCidr=$ADMIN_CIDR_1" "AdminCidr2=${ADMIN_CIDR_2:-}" "Profile=$PROFILE" \
         "InstanceType=$INSTANCE_TYPE" "MeasuredInstanceType=$MEASURED_TYPE" "CpuCredits=$CPU_CREDITS" "FlowLogs=$FLOW_LOGS" \
         "AutoTerminateMinutes=$AUTO_TERMINATE"
 
