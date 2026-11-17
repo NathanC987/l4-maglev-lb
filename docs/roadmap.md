@@ -157,6 +157,32 @@ that keeps a strong reference; and tick-based `/proc/<pid>/stat` CPU accounting 
 the lightly loaded datapath as exactly 0%, so the bridge reads nanosecond
 `schedstat` instead.
 
+## Cloud deployment (done)
+
+The system on real hosts: EC2 + VPC, created and deleted with CloudFormation, with
+Prometheus and Grafana on a monitoring instance and CloudWatch metrics + VPC Flow Logs
+as an independent referee. See [`cloud.md`](cloud.md).
+
+- `cloud/`: the stack, deploy and run scripts, the referee, and a smoke test.
+- Verified on AWS: bring-up on every hop, crash detected in 1.0 s, a drain with 0
+  failures, the demo with AWS's GRE count within 0.08% of `maglev-lb`'s and a 99× DSR
+  ratio, and 8,000 new connections per second with no failures at 12% of a core.
+
+- **The live canvas on AWS** (`cloud/canvas.sh`): each canvas node is an EC2
+  instance, started when added and stopped when removed, with the load slider
+  driving real traffic. The bridge's role can only start and stop the stack's
+  instances, so AWS enforces the 8-instance pool. Verified on AWS end to end. Two
+  changes to `maglev-lb` came with it: `--backend IP:PORT@MAC`, so a backend may be
+  powered off at startup, and re-picking the backend for a SYN whose pinned backend
+  has gone. The canvas found the latter: after a crash, reused client ports made
+  ~2.5% of new connections time out until the stale entries expired.
+
+Things only real hosts showed: T3 instances in `standard` mode start with no CPU
+credits; VPC Flow Logs don't log a backend's VIP-sourced replies, so the referee proves
+who sent them from CloudWatch's packet counters instead; and a TCP-connect health check
+kept a backend in the table while its application had stopped answering, a stall that
+has not been explained or reproduced.
+
 ## M5 - eBPF/XDP fast path (stretch)
 
 Reuse `backend_manager`/`health_checker`/`table_generator` unchanged as the control

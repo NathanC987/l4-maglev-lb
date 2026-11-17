@@ -123,10 +123,24 @@ static void handle_packet(struct datapath *dp, uint8_t *rx_buf, uint8_t *tx_buf)
     }
 
     const struct backend_view *backend = routing_snapshot_find_backend(snap, backend_id);
+    if (backend == NULL && hit && fx.tcp_syn) {
+        /* A SYN is a new connection even when its 5-tuple matches a flow still
+         * pinned to a backend that has since gone down: the client reused a
+         * source port inside conntrack's idle timeout. Dropping it, as below,
+         * would time out every such connection until the stale entry expires
+         * (seen on AWS: ~2.5% of new connections for the whole timeout after a
+         * crash). Pick a backend for it as for any new flow. */
+        int32_t fresh = maglev_table_lookup(snap->table, &fx.key);
+        if (fresh >= 0 && conntrack_repin(dp->cfg.ct, &fx.key, fresh, now)) {
+            stats_backend_flow_closed(stats, (uint32_t)backend_id);
+            stats_backend_flow_opened(stats, (uint32_t)fresh);
+            backend_id = fresh;
+            backend = routing_snapshot_find_backend(snap, backend_id);
+        }
+    }
     if (backend == NULL) {
-        /* Pinned (via conntrack) to a backend no longer in the active
-         * snapshot. Unreachable in v1 (static backend set); M2's dynamic
-         * churn will need a real re-pinning policy here. */
+        /* Pinned (via conntrack) to a backend no longer in the active snapshot,
+         * mid-connection: that connection died with its backend. */
         atomic_fetch_add_explicit(&stats->drops_backend_unhealthy, 1, memory_order_relaxed);
         return;
     }

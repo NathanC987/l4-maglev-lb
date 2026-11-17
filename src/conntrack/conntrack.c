@@ -78,6 +78,19 @@ int conntrack_lookup(struct conntrack_table *ct, const struct flow_key *key, uin
     return 0;
 }
 
+int conntrack_repin(struct conntrack_table *ct, const struct flow_key *key, int32_t backend_id,
+                     uint64_t now_ns) {
+    size_t idx = (size_t)(flow_hash(key) & (ct->bucket_count - 1));
+    for (struct conntrack_entry *e = ct->buckets[idx]; e != NULL; e = e->next) {
+        if (memcmp(&e->key, key, sizeof(*key)) == 0) {
+            e->backend_id = backend_id;
+            e->last_seen_ns = now_ns;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int conntrack_insert(struct conntrack_table *ct, const struct flow_key *key, int32_t backend_id,
                       uint64_t now_ns) {
     if (ct->free_list == NULL) {

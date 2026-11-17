@@ -17,7 +17,9 @@ is M4's "pre-provisioned, started late" mechanism, needing no runtime
 backend-add API in maglev-lb.
 
 Slot lifecycle:
-  free -> starting   (responder spawned; waiting for LB up && admin enabled)
+  free -> booting    (only if the slot's machine isn't usable yet: the AWS canvas,
+                      where a backend is an EC2 instance; local namespaces skip this)
+       -> starting   (responder spawned; waiting for LB up && admin enabled)
        -> serving
        -> draining   (removed from canvas: `DRAIN id` - no new flows, pinned ones
                       finish; until the responder is idle for 1s, or 30s)
@@ -77,8 +79,9 @@ def _cfg(d, keys):
 
 
 class Reconciler:
-    def __init__(self, executor, n_slots):
+    def __init__(self, executor, n_slots, n_clients=MAX_CLIENT_SLOTS):
         self.ex = executor
+        self.n_clients = n_clients
         self.slots = {n: Slot(n) for n in range(1, n_slots + 1)}
         self.slot_memory = {}    # canvas id -> slot number it last used
         self.clients = {}        # canvas id -> ClientRec
@@ -110,8 +113,12 @@ class Reconciler:
         self.desired = desired
 
     def _spawn(self, slot, cfg, now):
-        slot.handle = self.ex.spawn_backend(slot.n, cfg)
         slot.config = cfg
+        if not self.ex.host_ready(slot.n):
+            slot.handle = None
+            slot.phase = "booting"
+            return
+        slot.handle = self.ex.spawn_backend(slot.n, cfg)
         slot.phase = "starting"
         slot.killed = False
         self._event(now, f"slot {slot.n}: responder started for {slot.owner}")
@@ -134,7 +141,8 @@ class Reconciler:
     def action(self, act, now):
         cid = act["target"]
         slot = self.slot_of(cid)
-        if slot is None or cid not in self._desired_backends() or slot.removing:
+        if slot is None or cid not in self._desired_backends() or slot.removing \
+                or slot.phase == "booting":
             raise ActionError(f"{cid} is not a running backend")
         kind = act["action"]
         if kind in ("crash", "slow", "errors", "partition"):
@@ -210,7 +218,7 @@ class Reconciler:
             if rec is None:
                 idx = self.client_memory.get(cid)
                 if idx is None or idx in used:
-                    free = [i for i in range(MAX_CLIENT_SLOTS) if i not in used]
+                    free = [i for i in range(self.n_clients) if i not in used]
                     if not free:
                         continue
                     idx = free[0]
@@ -218,7 +226,11 @@ class Reconciler:
                 self.client_memory[cid] = idx
                 rec = self.clients[cid] = ClientRec(cid, idx)
             if rec.handle is None or not self.ex.alive(rec.handle):
-                if rec.handle is not None:
+                lost = rec.handle is not None and self.ex.lost(rec.handle)
+                if not self.ex.client_host_ready(rec.index):
+                    rec.handle = None
+                    continue
+                if rec.handle is not None and not lost:
                     self._event(now, f"client {cid}: process exited, restarting", "warn")
                 rec.handle = self.ex.spawn_client(rec.index, cfg, enabled)
                 rec.config, rec.enabled = cfg, enabled
@@ -281,8 +293,18 @@ class Reconciler:
             up = bool(obs.get("up"))
             alive = self.ex.alive(slot.handle)
 
+            if slot.phase == "booting":
+                if self.ex.host_ready(slot.n) and slot.owner in want:
+                    self._spawn(slot, _cfg(want[slot.owner], BACKEND_CONFIG_KEYS), now)
+                continue
+
             if slot.phase in ("starting", "serving", "unhealthy", "draining") and not alive \
                     and not slot.removing:
+                if self.ex.lost(slot.handle) and slot.owner in want:
+                    # The connection to its machine broke, which is not a crash.
+                    self._event(now, f"{slot.owner}: lost contact with its host, reconnecting", "warn")
+                    self._spawn(slot, _cfg(want[slot.owner], BACKEND_CONFIG_KEYS), now)
+                    continue
                 slot.phase = "crashed"
                 if slot.fault is None:
                     slot.fault = {"kind": "crash", "sinceMs": now}

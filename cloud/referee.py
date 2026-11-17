@@ -9,11 +9,18 @@ DIR (filled by cloud/dsr-proof.sh) holds:
                  run, marked by cloud/lib.sh's mark_window, with maglev-lb's own counters
   roles.json     {"i-0abc...": "lb", ...}
   flowlogs.json  `aws logs filter-log-events --output json` for the window
-  cw-*.json      optional `aws cloudwatch get-metric-statistics` results (info only)
+  cw-*.json      `aws cloudwatch get-metric-statistics` results, cw-<role>-<Metric>.json,
+                 over the metric periods that cover the window, plus the next one
 
 Flow-log records use the custom format in cloud/stack.yaml. The fields that make
 this work are pkt-srcaddr / pkt-dstaddr: the addresses written in the packet,
-which for a backend's replies is the VIP, not the backend's own address.
+which for the client's replies is the VIP, whichever host sent them.
+
+Observed on AWS: a backend's egress with the VIP as its source address (which
+source/dest check off allows) is not logged on the backend's interface; the
+interface gets SKIPDATA records for those intervals instead. So which host sent
+the replies comes from CloudWatch's per-instance packet counters, which the
+hypervisor keeps for every packet, rather than from the backends' flow logs.
 
 Exits 0 when every check passes, 1 when one fails, 2 when the data is unusable.
 """
@@ -32,10 +39,12 @@ VIP = "10.200.0.10"
 CLIENT_IP = "10.99.1.10"
 LB_IP = "10.99.1.20"
 
-# Flow-log aggregation intervals are up to 60 s and not aligned to anything, so
-# records overlapping the window by up to this much still belong to it. The run
-# scripts keep VIP traffic strictly inside the window, so nothing else leaks in.
-SLACK_S = 90
+# A record covers an aggregation interval of up to 60 s, and AWS can stamp it up to
+# 60 s after its packets. So the records holding the window's packets are those that
+# end after it starts and start no later than this long after it ends. Earlier
+# traffic can be stamped late too (seen: about 70 s), so the run scripts keep the 95 s
+# before a window free of VIP traffic, and they send none after it.
+LATE_S = 60
 
 
 def parse_record(message):
@@ -54,22 +63,24 @@ def parse_record(message):
 
 
 def load_records(events, roles, t0, t1):
-    """Flow-log records inside [t0 - SLACK, t1 + SLACK], with a 'host' role name.
-    Returns (records, skipped) where skipped counts SKIPDATA records (AWS dropped
-    some flow records under load: totals are then lower bounds)."""
-    out, skipped = [], 0
+    """Flow-log records holding the window's packets, with a 'host' role name.
+    Returns (records, skipped) where skipped counts SKIPDATA records per host (AWS
+    dropped some of that interface's flow records: its totals are lower bounds)."""
+    out, skipped = [], collections.Counter()
     for ev in events:
         r = parse_record(ev.get("message", ""))
         if r is None:
             continue
+        host = roles.get(r["instance"], r["instance"])
         if r["status"] == "SKIPDATA":
-            skipped += 1
+            if int(r["end"]) > t0 and int(r["start"]) <= t1 + LATE_S:
+                skipped[host] += 1
             continue
         if r["status"] != "OK" or r["action"] != "ACCEPT":
             continue
-        if r["end"] < t0 - SLACK_S or r["start"] > t1 + SLACK_S:
+        if r["end"] <= t0 or r["start"] > t1 + LATE_S:
             continue
-        r["host"] = roles.get(r["instance"], r["instance"])
+        r["host"] = host
         out.append(r)
     return out, skipped
 
@@ -106,8 +117,10 @@ def is_backend(h):
     return h.startswith("be")
 
 
-def checks(table, window, skipped):
-    """Returns [(name, ok, detail)]. ok is True, False, or None (inconclusive)."""
+def checks(table, window, skipped, cw=None):
+    """Returns [(name, ok, detail)]. ok is True, False, None (inconclusive) or
+    "info" (a measurement, not a pass/fail claim). cw is cw_sums()' result."""
+    cw = cw or {}
     res = []
     lb_gre_out = total(table, "lb", "egress", "GRE", src=LB_IP, idx=0)
     lb_reply = total(table, "lb", "egress", "TCP", src=VIP) + \
@@ -116,49 +129,67 @@ def checks(table, window, skipped):
                 lb_reply == 0 and lb_gre_out > 0,
                 f"{lb_reply} bytes of replies from the LB, {lb_gre_out} GRE packets out"))
 
-    be_reply = total(table, is_backend, "egress", "TCP", src=VIP, dst=CLIENT_IP)
-    per_be = {h: v[1] for (h, d, p, ps, pd), v in table.items()
-              if is_backend(h) and d == "egress" and p == "TCP" and ps == VIP and pd == CLIENT_IP}
-    res.append(("Backends send the replies themselves, with the VIP as their source address",
-                be_reply > 0,
-                ", ".join(f"{h} {b} B" for h, b in sorted(per_be.items())) or "none"))
-
     client_in = total(table, "client", "ingress", "TCP", src=VIP)
+    client_in_pk = total(table, "client", "ingress", "TCP", src=VIP, idx=0)
+    res.append(("The client gets its replies from the VIP",
+                client_in_pk > 0, f"{client_in_pk} packets, {client_in} B"))
+
+    # Who sent them: not the LB (above), so the backends - which CloudWatch's
+    # per-instance counters must then show sending at least as many packets.
+    name = "The backends sent at least as many packets as the client got from the VIP"
+    be_cw = {r: v for (r, m), v in cw.items() if is_backend(r) and m == "NetworkPacketsOut"}
+    if be_cw and client_in_pk:
+        sent = sum(be_cw.values())
+        res.append((name, sent >= client_in_pk,
+                    f"CloudWatch NetworkPacketsOut {', '.join(f'{r} {int(v)}' for r, v in sorted(be_cw.items()))}"
+                    f" vs {client_in_pk} (the backends' counts also hold health-check replies and SSH)"))
+    else:
+        res.append((name, None, "no CloudWatch datapoints for the backends yet"))
+
+    be_reply = total(table, is_backend, "egress", "TCP", src=VIP, dst=CLIENT_IP)
     if be_reply and client_in:
         diff = abs(client_in - be_reply) / be_reply
-        res.append(("What the client received from the VIP is what the backends sent",
+        res.append(("What the client received from the VIP is what the backends' flow logs show sent",
                     diff <= 0.05, f"client {client_in} B, backends {be_reply} B ({diff:.1%} apart)"))
     else:
-        res.append(("What the client received from the VIP is what the backends sent",
-                    False, f"client {client_in} B, backends {be_reply} B"))
+        be_skips = sum(n for h, n in skipped.items() if is_backend(h))
+        res.append(("Backends' own flow logs of their VIP-sourced replies", "info",
+                    f"none logged ({be_skips} SKIPDATA records on the backends' interfaces)"))
 
     lb_out_bytes = total(table, "lb", "egress")
     if lb_out_bytes and client_in:
-        res.append(("Reply bytes per byte the LB sent (the DSR ratio)", True,
+        res.append(("Reply bytes per byte the LB sent (the DSR ratio)", "info",
                     f"{client_in / lb_out_bytes:.1f}x"))
 
     if window and "start" in window and "end" in window:
         own = window["end"]["txPackets"] - window["start"]["txPackets"]
+        name = "maglev-lb's count of packets it forwarded matches AWS's GRE count"
         if own > 0:
             diff = abs(lb_gre_out - own) / own
-            ok = diff <= 0.02 if skipped == 0 else None
-            res.append(("maglev-lb's count of packets it forwarded matches AWS's GRE count",
-                        ok, f"maglev-lb {int(own)}, flow logs {lb_gre_out} ({diff:.2%} apart)"
-                        + (f"; {skipped} SKIPDATA records, so AWS's count is a lower bound"
-                           if skipped else "")))
+            lb_skips = skipped.get("lb", 0)
+            res.append((name, diff <= 0.02 if lb_skips == 0 else None,
+                        f"maglev-lb {int(own)}, flow logs {lb_gre_out} ({diff:.2%} apart)"
+                        + (f"; {lb_skips} SKIPDATA records on the LB, so AWS's count is a lower bound"
+                           if lb_skips else "")))
+            lb_cw = cw.get(("lb", "NetworkPacketsOut"))
+            if lb_cw:
+                res.append(("CloudWatch counts at least as many packets out of the LB as it forwarded",
+                            lb_cw >= own, f"NetworkPacketsOut {int(lb_cw)} vs maglev-lb {int(own)}"
+                            " (AWS's count also holds health checks and SSH)"))
         else:
-            res.append(("maglev-lb's count of packets it forwarded matches AWS's GRE count",
-                        False, "maglev-lb forwarded nothing in the window"))
+            res.append((name, False, "maglev-lb forwarded nothing in the window"))
     return res
 
 
 def cw_sums(directory):
-    """cw-<role>-<Metric>.json -> {(role, metric): sum of datapoints}."""
+    """cw-<role>-<Metric>.json -> {(role, metric): sum of datapoints}. A metric
+    with no datapoints (not published yet) is left out rather than read as 0."""
     out = {}
     for f in sorted(pathlib.Path(directory).glob("cw-*.json")):
         _, role, metric = f.stem.split("-", 2)
         pts = json.loads(f.read_text()).get("Datapoints", [])
-        out[(role, metric)] = sum(p.get("Sum", 0) for p in pts)
+        if pts:
+            out[(role, metric)] = sum(p.get("Sum", 0) for p in pts)
     return out
 
 
@@ -189,7 +220,7 @@ def main(argv):
         return 2
     table = summarize(records)
 
-    print(f"VPC Flow Logs, {t0}..{t1} (+/-{SLACK_S}s): {len(records)} records")
+    print(f"VPC Flow Logs, {t0}..{t1}: {len(records)} records")
     print(f"  {'host':6} {'dir':7} {'proto':5} {'packet source':15} {'packet dest':15} "
           f"{'packets':>9} {'bytes':>10}")
     for k, (pk, by) in sorted(table.items(), key=lambda kv: -kv[1][1])[:25]:
@@ -198,14 +229,14 @@ def main(argv):
 
     cw = cw_sums(d)
     if cw:
-        print("CloudWatch (AWS's per-instance counters, same window):")
+        print("CloudWatch (AWS's per-instance counters, the periods covering the window and the next):")
         for (role, metric), v in sorted(cw.items()):
             print(f"  {role:6} {metric:18} {fmt_bytes(v) if metric.endswith(('In', 'Out')) and 'Packets' not in metric else int(v)}")
 
     print("Checks:")
     failed = False
-    for name, ok, detail in checks(table, window, skipped):
-        tag = {True: "PASS", False: "FAIL", None: "INCONCLUSIVE"}[ok]
+    for name, ok, detail in checks(table, window, skipped, cw):
+        tag = {True: "PASS", False: "FAIL", None: "INCONCLUSIVE", "info": "INFO"}[ok]
         failed |= ok is False
         print(f"  {tag:12} {name}: {detail}")
     return 1 if failed else 0

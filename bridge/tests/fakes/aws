@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Stands in for the AWS CLI in test_cloud_e2e.py: EC2 instances as a JSON file in $HOME,
+and a log of every call, including whether it used the role's temporary credentials."""
+import json
+import os
+import sys
+import time
+
+home = os.environ["HOME"]
+path = os.path.join(home, "ec2.json")
+args = sys.argv[1:]
+with open(path) as f:
+    db = json.load(f)
+now = time.time()
+for i in db["instances"].values():
+    if i["state"] == "pending" and now >= i["at"]:
+        i.update(state="running", ip="192.0.2.%d" % i["n"])
+    elif i["state"] == "stopping" and now >= i["at"]:
+        i.update(state="stopped", ip=None)
+call = " ".join(args[:2])
+with open(os.path.join(home, "aws.log"), "a") as log:
+    log.write(json.dumps({"call": call, "args": args,
+                          "token": os.environ.get("AWS_SESSION_TOKEN")}) + "\n")
+if call == "sts assume-role":
+    out = {"Credentials": {"AccessKeyId": "AKFAKE", "SecretAccessKey": "s", "SessionToken": "tok"}}
+elif os.environ.get("AWS_SESSION_TOKEN") != "tok":
+    sys.exit("fake aws: ec2 call without the role's credentials")
+elif call == "ec2 describe-instances":
+    insts = [{"InstanceId": k, "InstanceType": i["type"], "State": {"Name": i["state"]},
+              "PublicIpAddress": i["ip"], "PrivateIpAddress": i["private"],
+              "NetworkInterfaces": [{"MacAddress": "0a:00:00:00:00:%02x" % i["n"]}],
+              "Tags": [{"Key": "l4mlb-role", "Value": i["role"]}]}
+             for k, i in db["instances"].items()]
+    out = {"Reservations": [{"Instances": insts}]}
+elif call in ("ec2 start-instances", "ec2 stop-instances"):
+    for k in args[args.index("--instance-ids") + 1:args.index("--output")]:
+        i = db["instances"][k]
+        start = call.endswith("start-instances")
+        if i["state"] != ("stopped" if start else "running"):
+            sys.exit(f"fake aws: IncorrectInstanceState {k} is {i['state']}")
+        i.update(state="pending" if start else "stopping", at=now + db["delay"])
+    out = {}
+else:
+    sys.exit(f"fake aws: unexpected call {call}")
+with open(path + ".tmp", "w") as f:
+    json.dump(db, f)
+os.replace(path + ".tmp", path)
+print(json.dumps(out))

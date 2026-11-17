@@ -34,6 +34,24 @@ static void test_insert_and_lookup(void) {
     conntrack_destroy(ct);
 }
 
+static void test_repin(void) {
+    struct conntrack_table *ct = conntrack_create(16);
+    assert(ct != NULL);
+    struct flow_key k = make_key(1), other = make_key(2);
+    int32_t out;
+
+    assert(conntrack_repin(ct, &k, 3, 0) == 0); /* nothing to move */
+    assert(conntrack_active_flows(ct) == 0);
+    assert(conntrack_insert(ct, &k, 7, 1000) == 0);
+    assert(conntrack_insert(ct, &other, 7, 1000) == 0);
+    assert(conntrack_repin(ct, &k, 3, 2000) == 1);
+    assert(conntrack_lookup(ct, &k, 2000, &out) == 1 && out == 3);
+    assert(conntrack_lookup(ct, &other, 2000, &out) == 1 && out == 7);
+    assert(conntrack_active_flows(ct) == 2);
+
+    conntrack_destroy(ct);
+}
+
 static void test_pool_exhaustion(void) {
     size_t max_flows = 16;
     struct conntrack_table *ct = conntrack_create(max_flows);
@@ -94,6 +112,7 @@ static void test_does_not_reap_fresh_entries(void) {
 
 int main(void) {
     test_insert_and_lookup();
+    test_repin();
     test_pool_exhaustion();
     test_reap_expired();
     test_does_not_reap_fresh_entries();

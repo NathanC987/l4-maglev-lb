@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #define TCP_MIN_HDR_LEN 20u
+#define TCP_FLAGS_OFFSET 13u
+#define TCP_FLAG_SYN 0x02u
+#define TCP_FLAG_ACK 0x10u
 #define UDP_HDR_LEN 8u
 
 /* Extracts src/dst ports (opaque network-byte-order values) from a TCP

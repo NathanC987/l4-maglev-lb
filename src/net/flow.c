@@ -49,5 +49,9 @@ enum parse_status packet_extract_flow(const uint8_t *buf, size_t len,
     out->key.proto = ip.protocol;
     out->ip_offset = ip_off;
     out->ip_total_len = ip.total_length;
+    /* Byte 13 of the TCP header holds the flags; tcp_parse_ports already checked
+     * the full minimum header is there. */
+    out->tcp_syn = ip.protocol == IPPROTO_TCP &&
+                   (buf[l4_off + TCP_FLAGS_OFFSET] & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == TCP_FLAG_SYN;
     return PARSE_OK;
 }

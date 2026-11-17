@@ -50,14 +50,14 @@ def run(argv, **kw):
 
 
 class Bridge:
+    measured_ceiling_pps = 520000  # docs/benchmarking.md; this machine's raw pps test
+
     def __init__(self, args, loop):
         self.args = args
         self.loop = loop
         self.run_dir = os.path.join(BRIDGE_DIR, ".run")
         self.admin_fifo = os.path.join(self.run_dir, "admin.fifo")
-        self.ip = tool("ip")
-        self.setpriv = tool("setpriv")
-        self.ex = Executor(loop, self.run_dir, self.admin_fifo, args.drop_uid, args.drop_gid)
+        self.ex = self.make_executor()
         self.r = Reconciler(self.ex, args.slots)
         self.publisher = Publisher()
         self.stop = asyncio.Event()
@@ -75,6 +75,12 @@ class Bridge:
         self.lb_baseline = {}
         self.lb_restart_pending = False
         self.record = open(args.record, "a") if args.record else None
+
+    def make_executor(self):
+        self.ip = tool("ip")
+        self.setpriv = tool("setpriv")
+        return Executor(self.loop, self.run_dir, self.admin_fifo, self.args.drop_uid,
+                        self.args.drop_gid)
 
     def event(self, msg, level="info"):
         self.events.append({"tMs": now_ms() - self.session_start, "level": level, "msg": msg})
@@ -177,7 +183,14 @@ class Bridge:
             text = await asyncio.to_thread(lbmetrics.fetch, METRICS_URL, 0.5)
         except OSError:
             return
-        s = lbmetrics.summarize(text)
+        t = now_ms()
+        cpu = pcpu = None
+        if self.lb_proc and self.lb_proc.poll() is None:
+            cpu = lbmetrics.thread_cpu_seconds(self.lb_proc.pid)
+            pcpu = lbmetrics.process_cpu_seconds(self.lb_proc.pid)
+        self.ingest_lb(lbmetrics.summarize(text), t, cpu, pcpu)
+
+    def ingest_lb(self, s, t, cpu, pcpu):
         self.lb_summary = s
         self.lb_obs = {bid: {"up": b.get("up", 0) >= 1, "adminEnabled": b.get("adminEnabled", 0) >= 1,
                              "draining": b.get("draining", 0) >= 1}
@@ -191,14 +204,10 @@ class Bridge:
             flat[f"be:{bid}:flowsAssigned"] = b.get("flowsAssigned", 0)
             flat[f"be:{bid}:packets"] = b.get("packets", 0)
             flat[f"be:{bid}:hcFailures"] = b.get("hcFailures", 0)
-        t = now_ms()
         self.lb_rates.push(t, flat)
-        if self.lb_proc and self.lb_proc.poll() is None:
-            cpu = lbmetrics.thread_cpu_seconds(self.lb_proc.pid)
-            pcpu = lbmetrics.process_cpu_seconds(self.lb_proc.pid)
-            if cpu is not None:
-                self.cpu_samples.append((t, cpu, pcpu or 0.0))
-                self.cpu_samples = [x for x in self.cpu_samples if x[0] >= t - 1500]
+        if cpu is not None:
+            self.cpu_samples.append((t, cpu, pcpu or 0.0))
+            self.cpu_samples = [x for x in self.cpu_samples if x[0] >= t - 1500]
 
     def _cpu(self):
         if len(self.cpu_samples) < 2:
@@ -243,28 +252,46 @@ class Bridge:
         return {"accepted": True}
 
     # --- snapshot --------------------------------------------------------------------
+    def lb_alive(self):
+        return self.lb_proc is not None and self.lb_proc.poll() is None
+
+    def lb_pid(self):
+        return self.lb_proc.pid if self.lb_proc else None
+
+    def lb_state(self):
+        return "running" if self.lb_alive() else "stopped"
+
+    def status_phase(self):
+        return self.phase if self.lb_alive() else "degraded"
+
+    def lb_errors(self):
+        return [] if self.lb_alive() else ["maglev-lb is not running"]
+
+    def client_state_override(self, rec):
+        """A client state that outranks process liveness, e.g. its host is booting."""
+        return None
+
     def build_snapshot(self):
         t = now_ms()
         d = self.r.desired
         s = self.lb_summary or {"drops": {}, "backends": {}}
         rates = self.lb_rates
         cpu_dp, cpu_proc = self._cpu()
-        lb_alive = self.lb_proc is not None and self.lb_proc.poll() is None
         owner_by_slot = {sl.n: sl.owner for sl in self.r.slots.values() if sl.owner}
-        client_by_ip = {client_ip(rec.index): cid for cid, rec in self.r.clients.items()}
+        client_by_ip = {self.ex.client_ip(rec.index): cid for cid, rec in self.r.clients.items()}
 
         snap = {
             "schema": schema.SCHEMA, "sessionId": self.session_id, "seq": self.seq,
             "tMs": round(t - self.session_start, 1),
             "rateWindowMs": 1000, "latencyWindowMs": 5000,
-            "status": {"phase": self.phase if lb_alive else "degraded",
+            "status": {"phase": self.status_phase(),
                        "loadEnabled": d["loadEnabled"] and not self.r.load_suppressed,
                        "autoPaused": self.r.load_suppressed,
-                       "errors": list(self.errors) + ([] if lb_alive else ["maglev-lb is not running"])
+                       "errors": list(self.errors) + self.lb_errors()
                        + ([f"no free backend slot for {sorted(self.r.pending)}"] if self.r.pending else [])},
             "lb": {
-                "id": d["lb"], "state": "running" if lb_alive else "stopped",
-                "pid": self.lb_proc.pid if self.lb_proc else None,
+                "id": d["lb"], "state": self.lb_state(),
+                "pid": self.lb_pid(),
                 "cpuDatapath": round(cpu_dp, 4), "cpuProcess": round(cpu_proc, 4),
                 "rxPps": rates.rate("rxPackets"), "txPps": rates.rate("txPackets"),
                 "rxBps": rates.rate("rxBytes"), "txBps": rates.rate("txBytes"),
@@ -279,7 +306,7 @@ class Bridge:
                 "config": {"slots": self.args.slots, **HC,
                            "ctTcpTimeoutMs": self.args.ct_timeout_ms,
                            "ctUdpTimeoutMs": self.args.ct_timeout_ms, "tableSize": 65537,
-                           "measuredCeilingPps": 520000},
+                           "measuredCeilingPps": self.measured_ceiling_pps},
             },
             "clients": {}, "backends": {}, "retiring": [], "events": [],
         }
@@ -291,6 +318,8 @@ class Bridge:
             alive = self.ex.alive(proc)
             if not c["connected"]:
                 state = "disconnected"
+            elif not alive and self.client_state_override(rec):
+                state = self.client_state_override(rec)
             elif not alive:
                 state = "exited"
             else:
@@ -302,7 +331,7 @@ class Bridge:
                 trace = {**trace, "backend": owner_by_slot.get(trace.get("slot"))}
             lag = st.get("lagMsMax", 0.0)
             snap["clients"][c["id"]] = {
-                "ip": client_ip(rec.index) if rec else None, "state": state,
+                "ip": self.ex.client_ip(rec.index) if rec else None, "state": state,
                 "config": {k: c[k] for k in ("rps", "timeoutMs", "retries", "poolSize", "maxConnAgeMs")},
                 "rates": {k: pr.rate(k) for k in ("scheduled", "attempts", "ok", "failed", "retries")},
                 "failedPsByReason": pr.rates_with_prefix("failedByReason:"),
@@ -338,7 +367,7 @@ class Bridge:
             busy_rate = pr.rate("busyIntegralMs")
             cap = st.get("capacity", cfg["capacity"]) or 1
             snap["backends"][b["id"]] = {
-                "slot": slot.n, "lbId": slot.lb_id, "addr": f"10.98.0.{10 + slot.n}:{BACKEND_PORT}",
+                "slot": slot.n, "lbId": slot.lb_id, "addr": self.ex.backend_addr(slot.n),
                 "phase": slot.phase,
                 "lb": {"up": lbb.get("up", 0) >= 1, "adminEnabled": lbb.get("adminEnabled", 0) >= 1,
                        "draining": lbb.get("draining", 0) >= 1,

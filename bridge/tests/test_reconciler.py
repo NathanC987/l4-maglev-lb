@@ -13,6 +13,17 @@ class FakeExecutor:
         self.procs = {}
         self.stats = {}
         self.n = 0
+        self.ready = True    # is the machine under every slot and client usable?
+        self.lost_handles = set()
+
+    def host_ready(self, slot):
+        return self.ready
+
+    def client_host_ready(self, index):
+        return self.ready
+
+    def lost(self, h):
+        return h in self.lost_handles
 
     def _new(self, kind, *args):
         self.n += 1
@@ -236,6 +247,83 @@ class TestReconciler(unittest.TestCase):
         self.r.set_desired(desired(backends=("a", "b", "c", "d", "e")))
         self.r.step(0, {})
         self.assertEqual(self.r.pending, {"e"})
+
+
+
+class HostsThatBootFirst(unittest.TestCase):
+    """The AWS canvas: a slot's machine may not be usable yet. Local namespaces always are."""
+
+    def setUp(self):
+        self.ex = FakeExecutor()
+        self.ex.ready = False
+        self.r = Reconciler(self.ex, 2)
+
+    def phase(self, cid):
+        return self.r.slot_of(cid).phase
+
+    def test_waits_for_its_host_before_spawning(self):
+        self.r.set_desired(desired(backends=("b1",), clients=()))
+        self.r.step(0, {})
+        self.assertEqual(self.phase("b1"), "booting")
+        self.assertEqual(self.ex.take(), [])
+        self.ex.ready = True
+        self.r.step(1, {})
+        self.assertEqual(self.phase("b1"), "starting")
+        self.assertEqual(self.ex.take()[0][0], "spawn_backend")
+
+    def test_uses_the_latest_config_when_the_host_is_finally_ready(self):
+        self.r.set_desired(desired(backends=("b1",), clients=()))
+        self.r.step(0, {})
+        self.r.set_desired(desired(backends=("b1",), clients=(), capacity=99))
+        self.ex.ready = True
+        self.r.step(1, {})
+        self.assertEqual(self.ex.take()[0], ("spawn_backend", self.r.slot_of("b1").n, 99))
+
+    def test_removal_while_booting_frees_the_slot(self):
+        self.r.set_desired(desired(backends=("b1",), clients=()))
+        self.r.step(0, {})
+        self.r.set_desired(desired(backends=(), clients=()))
+        self.r.step(1, {})
+        self.r.step(2, {})
+        self.assertIsNone(self.r.slot_of("b1"))
+        self.assertTrue(all(s.phase == "free" for s in self.r.slots.values()))
+
+    def test_actions_are_refused_while_booting(self):
+        self.r.set_desired(desired(backends=("b1",), clients=()))
+        self.r.step(0, {})
+        with self.assertRaises(ActionError):
+            self.r.action({"action": "crash", "target": "b1"}, 1)
+
+    def test_client_waits_for_its_host(self):
+        self.r.set_desired(desired(backends=(), clients=("c1",)))
+        self.r.step(0, {})
+        self.assertEqual(self.ex.take(), [])
+        self.ex.ready = True
+        self.r.step(1, {})
+        self.assertEqual(self.ex.take()[0][0], "spawn_client")
+
+    def test_lost_contact_is_not_a_crash(self):
+        self.ex.ready = True
+        self.r.set_desired(desired(backends=("b1",), clients=()))
+        self.r.step(0, {})
+        slot = self.r.slot_of("b1")
+        self.r.step(1, {slot.lb_id: {"up": True, "adminEnabled": True}})
+        self.assertEqual(slot.phase, "serving")
+        self.ex.procs[slot.handle] = False
+        self.ex.lost_handles.add(slot.handle)
+        self.ex.ready = False
+        self.r.step(2, {slot.lb_id: {"up": True, "adminEnabled": True}})
+        self.assertEqual(slot.phase, "booting")
+        self.assertIsNone(slot.fault)
+
+    def test_a_real_exit_is_still_a_crash(self):
+        self.ex.ready = True
+        self.r.set_desired(desired(backends=("b1",), clients=()))
+        self.r.step(0, {})
+        slot = self.r.slot_of("b1")
+        self.ex.procs[slot.handle] = False
+        self.r.step(1, {})
+        self.assertEqual(slot.phase, "crashed")
 
 
 if __name__ == "__main__":

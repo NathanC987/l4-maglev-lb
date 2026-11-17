@@ -51,6 +51,7 @@ class Proc:
     def __init__(self, kind, key, popen):
         self.kind, self.key, self.p = kind, key, popen
         self.latest = None
+        self.remote_pid = None  # the program's own pid, from its "ready" line
         self.rates = RateWindow(1000.0)
         self.lat = LatencyWindow(5000.0)
         self.lat_service = LatencyWindow(5000.0)
@@ -60,6 +61,8 @@ class Proc:
         return self.p.pid
 
     def on_line(self, msg):
+        if msg.get("type") == "ready":
+            self.remote_pid = msg.get("pid")
         if msg.get("type") != "stats":
             return
         self.latest = msg
@@ -80,32 +83,50 @@ class Proc:
         self.lat_service.clear()
 
 
-class Executor:
-    def __init__(self, loop, run_dir, admin_fifo, drop_uid, drop_gid):
+def backend_args(slot, cfg, lb_ip, seed):
+    return ["--slot", str(slot), "--lb-ip", lb_ip, "--port", str(BACKEND_PORT),
+            "--capacity", str(int(cfg["capacity"])), "--service-ms", repr(float(cfg["serviceMs"])),
+            "--service-cv", repr(float(cfg["serviceCv"])),
+            "--queue-limit", str(int(cfg["queueLimit"])),
+            "--error-rate", repr(float(cfg["errorRate"])), "--seed", str(seed)]
+
+
+def client_args(cfg, enabled, vip, src_ip, seed):
+    args = ["--vip", vip, "--port", str(BACKEND_PORT), "--src-ip", src_ip,
+            "--rps", repr(float(cfg["rps"])), "--timeout-ms", repr(float(cfg["timeoutMs"])),
+            "--retries", str(int(cfg["retries"])), "--pool-size", str(int(cfg["poolSize"])),
+            "--max-conn-age-ms", str(int(cfg["maxConnAgeMs"])), "--seed", str(seed)]
+    if not enabled:
+        args.append("--paused")
+    return args
+
+
+class BaseExecutor:
+    """What the reconciler needs from any executor, however the processes are run:
+    they read JSON commands on stdin, write JSON stats on stdout, and exit when
+    stdin closes."""
+
+    def __init__(self, loop, run_dir):
         self.loop = loop
         self.run_dir = run_dir
-        self.admin_fifo = admin_fifo
-        self.ip = tool("ip")
-        self.setpriv = tool("setpriv")
-        self.drop = ["--reuid", str(drop_uid), "--regid", str(drop_gid),
-                     "--clear-groups", "--no-new-privs"]
         self.procs = []
         self.seed = 1
+
+    # Whether the machine this slot's (or the clients') process runs on is usable
+    # yet. Local namespaces always are; the AWS executor's hosts boot first.
+    def host_ready(self, slot):
+        return True
+
+    def client_host_ready(self, index):
+        return True
+
+    def lost(self, proc):
+        """True if the process's control channel broke (rather than the process dying)."""
+        return False
 
     def _log(self, name):
         os.makedirs(os.path.join(self.run_dir, "logs"), exist_ok=True)
         return open(os.path.join(self.run_dir, "logs", name), "ab")
-
-    def _spawn_python(self, kind, key, ns, script, args, logname):
-        argv = [self.ip, "netns", "exec", ns, self.setpriv, "--pdeathsig", "TERM", *self.drop,
-                sys.executable, "-I", os.path.join(BRIDGE_DIR, script), *args]
-        with self._log(logname) as err:
-            p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=err, close_fds=True, start_new_session=True)
-        proc = Proc(kind, key, p)
-        self.procs.append(proc)
-        lc.spawn(self._pump(proc))
-        return proc
 
     async def _pump(self, proc):
         reader = asyncio.StreamReader(limit=1 << 20)
@@ -122,27 +143,6 @@ class Executor:
                     pass
         finally:
             transport.close()
-
-    def spawn_backend(self, slot, cfg):
-        self.seed += 1
-        args = ["--slot", str(slot), "--lb-ip", LB_IP, "--port", str(BACKEND_PORT),
-                "--capacity", str(int(cfg["capacity"])), "--service-ms", repr(float(cfg["serviceMs"])),
-                "--service-cv", repr(float(cfg["serviceCv"])),
-                "--queue-limit", str(int(cfg["queueLimit"])),
-                "--error-rate", repr(float(cfg["errorRate"])), "--seed", str(self.seed)]
-        return self._spawn_python("backend", slot, be_ns(slot), "service_server.py", args,
-                                  f"backend-slot{slot}.log")
-
-    def spawn_client(self, index, cfg, enabled):
-        self.seed += 1
-        args = ["--vip", VIP, "--port", str(BACKEND_PORT), "--src-ip", client_ip(index),
-                "--rps", repr(float(cfg["rps"])), "--timeout-ms", repr(float(cfg["timeoutMs"])),
-                "--retries", str(int(cfg["retries"])), "--pool-size", str(int(cfg["poolSize"])),
-                "--max-conn-age-ms", str(int(cfg["maxConnAgeMs"])), "--seed", str(self.seed)]
-        if not enabled:
-            args.append("--paused")
-        return self._spawn_python("client", index, NS_CLIENT, "load_client.py", args,
-                                  f"client{index}.log")
 
     def send(self, proc, obj):
         if proc is None or proc.p.poll() is not None:
@@ -171,6 +171,61 @@ class Executor:
     def latest(self, proc):
         return proc.latest if proc is not None else None
 
+    def reap(self):
+        """Forget exited processes (poll() already reaped them)."""
+        self.procs = [p for p in self.procs if p.p.poll() is None]
+
+    def stop_all(self, timeout=3.0):
+        for p in self.procs:
+            self.terminate(p)
+        for p in self.procs:
+            try:
+                p.p.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                p.p.kill()
+                p.p.wait()
+
+
+class Executor(BaseExecutor):
+    """Local network namespaces (see the module docstring)."""
+
+    def __init__(self, loop, run_dir, admin_fifo, drop_uid, drop_gid):
+        super().__init__(loop, run_dir)
+        self.admin_fifo = admin_fifo
+        self.ip = tool("ip")
+        self.setpriv = tool("setpriv")
+        self.drop = ["--reuid", str(drop_uid), "--regid", str(drop_gid),
+                     "--clear-groups", "--no-new-privs"]
+
+    def client_ip(self, index):
+        return client_ip(index)
+
+    def backend_addr(self, slot):
+        return f"10.98.0.{10 + slot}:{BACKEND_PORT}"
+
+    def _spawn_python(self, kind, key, ns, script, args, logname):
+        argv = [self.ip, "netns", "exec", ns, self.setpriv, "--pdeathsig", "TERM", *self.drop,
+                sys.executable, "-I", os.path.join(BRIDGE_DIR, script), *args]
+        with self._log(logname) as err:
+            p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=err, close_fds=True, start_new_session=True)
+        proc = Proc(kind, key, p)
+        self.procs.append(proc)
+        lc.spawn(self._pump(proc))
+        return proc
+
+    def spawn_backend(self, slot, cfg):
+        self.seed += 1
+        return self._spawn_python("backend", slot, be_ns(slot), "service_server.py",
+                                  backend_args(slot, cfg, LB_IP, self.seed),
+                                  f"backend-slot{slot}.log")
+
+    def spawn_client(self, index, cfg, enabled):
+        self.seed += 1
+        return self._spawn_python("client", index, NS_CLIENT, "load_client.py",
+                                  client_args(cfg, enabled, VIP, client_ip(index), self.seed),
+                                  f"client{index}.log")
+
     def admin(self, verb, lb_id):
         # maglev-lb keeps its own end open O_RDWR, so this never blocks waiting
         # for a reader; O_NONBLOCK guards against a dead LB instead of hanging.
@@ -188,17 +243,3 @@ class Executor:
                         "up" if up else "down"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
                        check=False)
-
-    def reap(self):
-        """Forget exited processes (poll() already reaped them)."""
-        self.procs = [p for p in self.procs if p.p.poll() is None]
-
-    def stop_all(self, timeout=3.0):
-        for p in self.procs:
-            self.terminate(p)
-        for p in self.procs:
-            try:
-                p.p.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                p.p.kill()
-                p.p.wait()

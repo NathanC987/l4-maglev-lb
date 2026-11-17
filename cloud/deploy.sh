@@ -71,7 +71,7 @@ hostnet() {
     local r=$1
     case "$r" in
         lb) ssh_to lb "sudo ~/$REMOTE_REPO/cloud/hostnet/lb.sh" ;;
-        client) ssh_to client "sudo ~/$REMOTE_REPO/cloud/hostnet/client.sh" ;;
+        client*) ssh_to "$r" "sudo ~/$REMOTE_REPO/cloud/hostnet/client.sh" ;;
         be*) ssh_to "$r" "sudo ~/$REMOTE_REPO/cloud/hostnet/backend.sh $LB_IP $VIP" ;;
         mon) ;;
     esac

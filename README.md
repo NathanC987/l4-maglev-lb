@@ -11,7 +11,8 @@ See [`docs/architecture.md`](docs/architecture.md) for how it's put together,
 algorithm, [`docs/testing-topology.md`](docs/testing-topology.md) for the netns/veth
 test environment, [`docs/draining.md`](docs/draining.md) for graceful backend removal,
 [`docs/benchmarking.md`](docs/benchmarking.md) for the benchmarking harness,
-[`docs/live-mode.md`](docs/live-mode.md) for the interactive canvas, and
+[`docs/live-mode.md`](docs/live-mode.md) for the interactive canvas,
+[`docs/cloud.md`](docs/cloud.md) for the AWS deployment, and
 [`docs/roadmap.md`](docs/roadmap.md) for what's built and what's next.
 
 ## Status
@@ -20,7 +21,8 @@ test environment, [`docs/draining.md`](docs/draining.md) for graceful backend re
   regeneration), **M3** (ncurses TUI), a Prometheus/Grafana visualization round, and
   **M4** (a backend-draining feature plus a benchmarking harness - see
   [Benchmarking](#benchmarking) below) are done and verified, plus a **live mode**: an
-  interactive canvas driving the real system (see [Live mode](#live-mode) below). See
+  interactive canvas driving the real system (see [Live mode](#live-mode) below), and a
+  **cloud deployment** on AWS (see [Cloud deployment](#cloud-deployment) below). See
   the roadmap doc for details.
 
 ## Requirements
@@ -124,6 +126,31 @@ sudo scripts/live/run-live-smoke-test.sh     # end-to-end checks
 See [`docs/live-mode.md`](docs/live-mode.md) for what is real versus configured,
 how the measurements map onto the canvas, the security model, and a demo walkthrough.
 
+## Cloud deployment
+
+The same system on separate EC2 instances, with AWS checking its claims. CloudFormation
+creates the VPC and hosts; Prometheus and Grafana run on a monitoring instance; and
+CloudWatch metrics and VPC Flow Logs measure the traffic independently of anything this
+project runs. In the demo, AWS's count of GRE packets was within 0.08% of `maglev-lb`'s,
+it recorded no replies from the LB, and the client received 99 bytes for each byte the
+LB sent. The LB handled 8,000 new connections per second with no failures at 12% of a core.
+
+```sh
+cloud/up.sh --profile full --cpu-credits unlimited   # create and deploy everything
+cloud/grafana-tunnel.sh                              # then http://localhost:3000
+cloud/run-demo.sh                                    # crash, drain, scale-out + AWS's checks
+cloud/run-cloud-smoke-test.sh                        # the same checks, with assertions
+cloud/down.sh && cloud/status.sh                     # delete it all, confirm nothing is left
+```
+
+The live canvas can drive the instances too: `cloud/canvas.sh up`, then `cloud/canvas.sh
+run`. Each node on the canvas is an EC2 instance, started when added and stopped when
+removed, with spending capped by a budget, a session limit and AWS permissions that
+cannot launch anything new.
+
+See [`docs/cloud.md`](docs/cloud.md) for what AWS forced, the setup (AWS CLI, key pair,
+vCPU quota), costs (about $0.26/hour from Free-plan credits), and the full results.
+
 ## Project layout
 
 ```
@@ -143,7 +170,8 @@ scripts/           Netns/veth topology setup and orchestration scripts
 scripts/bench/     The benchmark topology, controlled/ tests, and the demo/ scenario
 scripts/live/      Live-mode smoke test
 bridge/            Live mode: HTTP bridge, reconciler, and the client/backend workload processes
+cloud/             AWS deployment: CloudFormation stack, run scripts, and the AWS referee
 tools/             Standalone analysis binaries (maglev_remap_report)
 monitoring/        Prometheus + Grafana docker-compose stack and dashboards
-docs/              Architecture, algorithm, topology, draining, benchmarking, live mode, roadmap
+docs/              Architecture, algorithm, topology, draining, benchmarking, live mode, cloud, roadmap
 ```

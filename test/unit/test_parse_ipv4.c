@@ -100,6 +100,25 @@ static void test_extract_flow_tcp(void) {
     assert(fx.ip_offset == ETH_HDR_LEN);
 }
 
+static void test_extract_flow_tcp_syn(void) {
+    uint8_t buf[128];
+    size_t len;
+    uint8_t *flags = buf + ETH_HDR_LEN + IPV4_MIN_HDR_LEN + TCP_FLAGS_OFFSET;
+    struct flow_extract_result fx;
+
+    build_test_frame(buf, &len, 6, 0);
+    *flags = TCP_FLAG_SYN;
+    assert(packet_extract_flow(buf, len, &fx) == PARSE_OK && fx.tcp_syn);
+    *flags = TCP_FLAG_SYN | TCP_FLAG_ACK; /* SYN-ACK: not a new connection from the client */
+    assert(packet_extract_flow(buf, len, &fx) == PARSE_OK && !fx.tcp_syn);
+    *flags = TCP_FLAG_ACK;
+    assert(packet_extract_flow(buf, len, &fx) == PARSE_OK && !fx.tcp_syn);
+
+    build_test_frame(buf, &len, 17, 4); /* UDP has no SYN, whatever that byte holds */
+    buf[ETH_HDR_LEN + IPV4_MIN_HDR_LEN + TCP_FLAGS_OFFSET] = TCP_FLAG_SYN;
+    assert(packet_extract_flow(buf, len, &fx) == PARSE_OK && !fx.tcp_syn);
+}
+
 static void test_extract_flow_truncated(void) {
     uint8_t buf[128];
     size_t len;
@@ -126,6 +145,7 @@ int main(void) {
     test_ipv4_checksum_known_value();
     test_ipv4_build_and_parse();
     test_extract_flow_tcp();
+    test_extract_flow_tcp_syn();
     test_extract_flow_truncated();
     test_extract_flow_unsupported_ethertype();
     printf("test_parse_ipv4: all tests passed\n");

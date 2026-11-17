@@ -115,7 +115,7 @@ echo ""
 echo "=== Wind-down: no new sessions; waiting for open ones to finish ==="
 rstop client viewer USR1
 for _ in $(seq 1 $((BENCH_SESSION_MAX_S + 30))); do
-    ssh_to client "pgrep -f viewer_gen.py >/dev/null" || break
+    ssh_to client "pgrep -f '[v]iewer_gen.py' >/dev/null" || break
     sleep 1
 done
 sleep 5

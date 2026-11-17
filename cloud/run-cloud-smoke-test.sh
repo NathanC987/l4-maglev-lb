@@ -135,6 +135,7 @@ check "nothing fails during a drain" \
 echo ""
 echo "=== 4. AWS as referee, on a streaming run ==="
 stop_all_processes
+export BENCH_BITRATE_MIN_KBPS=500 BENCH_BITRATE_MAX_KBPS=1500   # as cloud/run-demo.sh
 for i in 1 2 3; do start_stream_backend "$i"; done
 sleep 1
 start_lb 3
@@ -146,7 +147,7 @@ rstart client viewer "python3 -u scripts/bench/viewer_gen.py $VIP $BACKEND_PORT 
     --metrics-port $VIEWER_METRICS_PORT --arrival-jitter-s 0.5 --max-session-s 40 --max-runtime-s 0"
 sleep 60
 rstop client viewer USR1
-for _ in $(seq 1 60); do ssh_to client "pgrep -f viewer_gen.py >/dev/null" || break; sleep 1; done
+for _ in $(seq 1 60); do ssh_to client "pgrep -f '[v]iewer_gen.py' >/dev/null" || break; sleep 1; done
 sleep 5
 mark_window "$WINDOW" end
 stop_all_processes

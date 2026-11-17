@@ -14,7 +14,38 @@ static int parse_ip(const char *s, uint32_t *out) {
     return 0;
 }
 
-static int parse_backend_spec(const char *spec, struct config_backend *out) {
+/* Exactly aa:bb:cc:dd:ee:ff, nothing before or after it. */
+static int parse_mac(const char *s, uint8_t out[CONFIG_MAC_LEN]) {
+    unsigned int b[CONFIG_MAC_LEN];
+    int used = -1;
+    if (strlen(s) != 17 ||
+        sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x%n", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5], &used) != 6 ||
+        used != 17) {
+        return -1;
+    }
+    for (size_t i = 0; i < CONFIG_MAC_LEN; i++) {
+        out[i] = (uint8_t)b[i];
+    }
+    return 0;
+}
+
+static int parse_backend_spec(const char *spec_in, struct config_backend *out) {
+    char spec[96];
+    if (strlen(spec_in) >= sizeof(spec)) {
+        return -1;
+    }
+    strcpy(spec, spec_in);
+
+    out->has_mac = false;
+    char *at = strchr(spec, '@');
+    if (at != NULL) {
+        *at = '\0';
+        if (parse_mac(at + 1, out->mac) != 0) {
+            return -1;
+        }
+        out->has_mac = true;
+    }
+
     const char *colon = strrchr(spec, ':');
     if (colon == NULL) {
         return -1;
@@ -47,7 +78,7 @@ static int parse_backend_spec(const char *spec, struct config_backend *out) {
 void config_print_usage(const char *prog, FILE *stream) {
     fprintf(stream,
             "Usage: %s --iface IFACE --vip VIP_IP --director-ip DIRECTOR_IP\n"
-            "          --backend IP:PORT [--backend IP:PORT ...]\n"
+            "          --backend IP:PORT[@MAC] [--backend IP:PORT[@MAC] ...]\n"
             "          [--ttl TTL] [--table-size M] [--max-flows N]\n"
             "          [--hc-interval-ms MS] [--hc-timeout-ms MS]\n"
             "          [--hc-rise N] [--hc-fall N] [--tui] [--metrics-port PORT]\n"
@@ -57,7 +88,9 @@ void config_print_usage(const char *prog, FILE *stream) {
             "                 segment in v1's netns topology: client- and backend-facing)\n"
             "  --vip          Virtual IP clients connect to\n"
             "  --director-ip  This host's own IP, used as the GRE outer source\n"
-            "  --backend      Backend real IP:port; repeat for multiple backends\n"
+            "  --backend      Backend real IP:port; repeat for multiple backends. With @MAC\n"
+            "                 (aa:bb:cc:dd:ee:ff) it uses that address instead of ARP, so\n"
+            "                 the backend may be powered off at startup\n"
             "                 (port is the health-check TCP-connect target, not used\n"
             "                 for datapath forwarding, which is pure DSR passthrough)\n"
             "  --ttl          Outer IP TTL for GRE-encapsulated packets (default 64)\n"
@@ -162,7 +195,7 @@ int config_parse_args(int argc, char **argv, struct config *out) {
                 return -1;
             }
             if (parse_backend_spec(optarg, &out->backends[out->n_backends]) != 0) {
-                fprintf(stderr, "invalid --backend (expected IP:PORT): %s\n", optarg);
+                fprintf(stderr, "invalid --backend (expected IP:PORT[@MAC]): %s\n", optarg);
                 return -1;
             }
             out->n_backends++;

@@ -9,7 +9,8 @@ Description: >-
 # maglev-lb ARPs each backend's IP directly (it has no next-hop gateway support),
 # and the VPC answers ARP only for addresses in the same subnet.
 #
-#   client 10.99.1.10   lb 10.99.1.20   be1..be4 10.99.1.31..34   mon 10.99.1.40
+#   client 10.99.1.10   client2 10.99.1.11 (canvas)   lb 10.99.1.20
+#   be1..be5 10.99.1.31..35   mon 10.99.1.40
 #   VIP    10.200.0.10  (outside the VPC CIDR, routed to the LB by the route table)
 
 Parameters:
@@ -23,17 +24,35 @@ Parameters:
   Profile:
     Type: String
     Default: full
-    AllowedValues: [minimal, full]
+    AllowedValues: [minimal, full, canvas]
     Description: >-
-      minimal = client + lb + be1 (bring-up checks); full = adds be2..be4 and mon.
+      minimal = client + lb + be1 (bring-up checks); full = adds be2..be4 and mon;
+      canvas = client, client2, lb, be1..be5, started and stopped from the live
+      canvas (see cloud/canvas.sh). 8 instances of 2 vCPUs: the 16-vCPU quota exactly.
   InstanceType:
     Type: String
     Default: t3.micro
     AllowedValues: [t3.micro, t3.small, t2.micro, c7i-flex.large, m7i-flex.large]
     Description: >-
-      Use a type your account's free tier covers: t3.micro / c7i-flex.large on the
-      Free plan (accounts created after 2025-07-15), t2.micro on most legacy
-      12-month free-tier accounts. See docs/cloud.md.
+      The backends and mon. Use a type your account's free tier covers: t3.micro /
+      c7i-flex.large on the Free plan (accounts created after 2025-07-15), t2.micro
+      on most legacy 12-month free-tier accounts. See docs/cloud.md.
+  MeasuredInstanceType:
+    Type: String
+    Default: c7i-flex.large
+    AllowedValues: [t3.micro, t3.small, t2.micro, c7i-flex.large, m7i-flex.large]
+    Description: >-
+      The lb and the client, the two hosts the benchmarks measure. A T3 in standard
+      credit mode starts with no CPU credits and earns 12 an hour, so under load it
+      is soon throttled to its baseline; c7i-flex.large has no credits to run out of.
+  CpuCredits:
+    Type: String
+    Default: standard
+    AllowedValues: [standard, unlimited]
+    Description: >-
+      For burstable instances. standard throttles to the baseline when out of credits
+      and never costs extra. unlimited keeps full speed and bills CPU above the
+      baseline at $0.05 per vCPU-hour (from the credits on the Free plan).
   FlowLogs:
     Type: String
     Default: "on"
@@ -47,7 +66,9 @@ Parameters:
     Default: 240
     MinValue: 30
     MaxValue: 720
-    Description: Dead-man switch. Every instance terminates itself after this long.
+    Description: >-
+      Dead-man switch. Every instance terminates itself this long after booting; on
+      the canvas profile it stops instead, and the switch re-arms on every start.
   ImageId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
@@ -55,13 +76,19 @@ Parameters:
 
 Conditions:
   IsFull: !Equals [!Ref Profile, full]
+  IsCanvas: !Equals [!Ref Profile, canvas]
+  HasBe2To4: !Or [{Condition: IsFull}, {Condition: IsCanvas}]
   FlowLogsOn: !Equals [!Ref FlowLogs, "on"]
-  # CreditSpecification is only valid on burstable families. "standard" means the
-  # instance is throttled to its baseline when out of credits instead of billing
-  # for surplus CPU, which T3's default ("unlimited") would do.
+  # CreditSpecification is only valid on burstable families.
   IsBurstable: !Or
     - !Equals [!Select [0, !Split [".", !Ref InstanceType]], t2]
     - !Equals [!Select [0, !Split [".", !Ref InstanceType]], t3]
+  ClientIsBurstable: !Or
+    - !And [{Condition: IsCanvas}, {Condition: IsBurstable}]
+    - !And [!Not [{Condition: IsCanvas}], {Condition: MeasuredIsBurstable}]
+  MeasuredIsBurstable: !Or
+    - !Equals [!Select [0, !Split [".", !Ref MeasuredInstanceType]], t2]
+    - !Equals [!Select [0, !Split [".", !Ref MeasuredInstanceType]], t3]
 
 Resources:
   Vpc:
@@ -221,18 +248,48 @@ Resources:
     Properties:
       Roles: [!Ref MonRole]
 
+  # What the live canvas's bridge runs as: it may start and stop this stack's
+  # instances and read their state, and nothing else. It cannot launch an instance,
+  # so the pool in this template is a hard limit on how much a bug could spend.
+  CanvasOperatorRole:
+    Type: AWS::IAM::Role
+    Condition: IsCanvas
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-stop-this-stack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ec2:StartInstances, ec2:StopInstances]
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals: {"ec2:ResourceTag/l4mlb-canvas": !Ref AWS::StackName}
+              - Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: "*"
+
   # ---- Instances --------------------------------------------------------------
   # User data is kept tiny on purpose: it only records the role and arms the
   # dead-man switch. Packages and the code are installed by cloud/deploy.sh over
-  # SSH, so a fix never needs the instances recreated.
+  # SSH, so a fix never needs the instances recreated. User data runs only on the
+  # first boot, so a per-boot script re-arms the switch after a stop and start.
   ClientInstance:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref ImageId
-      InstanceType: !Ref InstanceType
+      InstanceType: !If [IsCanvas, !Ref InstanceType, !Ref MeasuredInstanceType]
       KeyName: !Ref KeyName
-      InstanceInitiatedShutdownBehavior: terminate
-      CreditSpecification: !If [IsBurstable, {CPUCredits: standard}, !Ref AWS::NoValue]
+      InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
+      MetadataOptions: {HttpTokens: required}
+      CreditSpecification: !If [ClientIsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
       NetworkInterfaces:
         - {DeviceIndex: "0", SubnetId: !Ref Subnet, PrivateIpAddress: 10.99.1.10,
            GroupSet: [!Ref SecurityGroup], AssociatePublicIpAddress: true,
@@ -242,16 +299,49 @@ Resources:
           #!/bin/bash
           echo client > /etc/l4mlb-role
           shutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-terminate"
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-client"}, {Key: l4mlb-role, Value: client}]
+          printf '#!/bin/sh\nshutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-stop"\n' >/var/lib/cloud/scripts/per-boot/l4mlb-deadman
+          chmod 755 /var/lib/cloud/scripts/per-boot/l4mlb-deadman
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-client"}
+        - {Key: l4mlb-role, Value: client}
+        - !If [IsCanvas, {Key: l4mlb-canvas, Value: !Ref AWS::StackName}, !Ref AWS::NoValue]
+
+  # The canvas's second client: each canvas client is its own instance.
+  Client2Instance:
+    Type: AWS::EC2::Instance
+    Condition: IsCanvas
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !If [IsCanvas, !Ref InstanceType, !Ref MeasuredInstanceType]
+      KeyName: !Ref KeyName
+      InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
+      MetadataOptions: {HttpTokens: required}
+      CreditSpecification: !If [ClientIsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
+      NetworkInterfaces:
+        - {DeviceIndex: "0", SubnetId: !Ref Subnet, PrivateIpAddress: 10.99.1.11,
+           GroupSet: [!Ref SecurityGroup], AssociatePublicIpAddress: true,
+           DeleteOnTermination: true}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          echo client2 > /etc/l4mlb-role
+          shutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-terminate"
+          printf '#!/bin/sh\nshutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-stop"\n' >/var/lib/cloud/scripts/per-boot/l4mlb-deadman
+          chmod 755 /var/lib/cloud/scripts/per-boot/l4mlb-deadman
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-client2"}
+        - {Key: l4mlb-role, Value: client2}
+        - !If [IsCanvas, {Key: l4mlb-canvas, Value: !Ref AWS::StackName}, !Ref AWS::NoValue]
 
   LbInstance:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref ImageId
-      InstanceType: !Ref InstanceType
+      InstanceType: !Ref MeasuredInstanceType
       KeyName: !Ref KeyName
-      InstanceInitiatedShutdownBehavior: terminate
-      CreditSpecification: !If [IsBurstable, {CPUCredits: standard}, !Ref AWS::NoValue]
+      InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
+      MetadataOptions: {HttpTokens: required}
+      CreditSpecification: !If [MeasuredIsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
       # It receives packets addressed to the VIP, which is not its own address.
       SourceDestCheck: false
       # 1-minute EC2 metrics on the LB only: 7 metrics, inside the free 10.
@@ -265,7 +355,12 @@ Resources:
           #!/bin/bash
           echo lb > /etc/l4mlb-role
           shutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-terminate"
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-lb"}, {Key: l4mlb-role, Value: lb}]
+          printf '#!/bin/sh\nshutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-stop"\n' >/var/lib/cloud/scripts/per-boot/l4mlb-deadman
+          chmod 755 /var/lib/cloud/scripts/per-boot/l4mlb-deadman
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-lb"}
+        - {Key: l4mlb-role, Value: lb}
+        - !If [IsCanvas, {Key: l4mlb-canvas, Value: !Ref AWS::StackName}, !Ref AWS::NoValue]
 
   # Backends send DSR replies with the VIP as the source address, which the VPC
   # drops unless source/destination checking is off.
@@ -275,8 +370,9 @@ Resources:
       ImageId: !Ref ImageId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyName
-      InstanceInitiatedShutdownBehavior: terminate
-      CreditSpecification: !If [IsBurstable, {CPUCredits: standard}, !Ref AWS::NoValue]
+      InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
+      MetadataOptions: {HttpTokens: required}
+      CreditSpecification: !If [IsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
       SourceDestCheck: false
       NetworkInterfaces:
         - {DeviceIndex: "0", SubnetId: !Ref Subnet, PrivateIpAddress: 10.99.1.31,
@@ -287,17 +383,23 @@ Resources:
           #!/bin/bash
           echo be1 > /etc/l4mlb-role
           shutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-terminate"
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-be1"}, {Key: l4mlb-role, Value: be1}]
+          printf '#!/bin/sh\nshutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-stop"\n' >/var/lib/cloud/scripts/per-boot/l4mlb-deadman
+          chmod 755 /var/lib/cloud/scripts/per-boot/l4mlb-deadman
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-be1"}
+        - {Key: l4mlb-role, Value: be1}
+        - !If [IsCanvas, {Key: l4mlb-canvas, Value: !Ref AWS::StackName}, !Ref AWS::NoValue]
 
   Be2Instance:
     Type: AWS::EC2::Instance
-    Condition: IsFull
+    Condition: HasBe2To4
     Properties:
       ImageId: !Ref ImageId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyName
-      InstanceInitiatedShutdownBehavior: terminate
-      CreditSpecification: !If [IsBurstable, {CPUCredits: standard}, !Ref AWS::NoValue]
+      InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
+      MetadataOptions: {HttpTokens: required}
+      CreditSpecification: !If [IsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
       SourceDestCheck: false
       NetworkInterfaces:
         - {DeviceIndex: "0", SubnetId: !Ref Subnet, PrivateIpAddress: 10.99.1.32,
@@ -308,17 +410,23 @@ Resources:
           #!/bin/bash
           echo be2 > /etc/l4mlb-role
           shutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-terminate"
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-be2"}, {Key: l4mlb-role, Value: be2}]
+          printf '#!/bin/sh\nshutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-stop"\n' >/var/lib/cloud/scripts/per-boot/l4mlb-deadman
+          chmod 755 /var/lib/cloud/scripts/per-boot/l4mlb-deadman
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-be2"}
+        - {Key: l4mlb-role, Value: be2}
+        - !If [IsCanvas, {Key: l4mlb-canvas, Value: !Ref AWS::StackName}, !Ref AWS::NoValue]
 
   Be3Instance:
     Type: AWS::EC2::Instance
-    Condition: IsFull
+    Condition: HasBe2To4
     Properties:
       ImageId: !Ref ImageId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyName
-      InstanceInitiatedShutdownBehavior: terminate
-      CreditSpecification: !If [IsBurstable, {CPUCredits: standard}, !Ref AWS::NoValue]
+      InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
+      MetadataOptions: {HttpTokens: required}
+      CreditSpecification: !If [IsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
       SourceDestCheck: false
       NetworkInterfaces:
         - {DeviceIndex: "0", SubnetId: !Ref Subnet, PrivateIpAddress: 10.99.1.33,
@@ -329,18 +437,24 @@ Resources:
           #!/bin/bash
           echo be3 > /etc/l4mlb-role
           shutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-terminate"
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-be3"}, {Key: l4mlb-role, Value: be3}]
+          printf '#!/bin/sh\nshutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-stop"\n' >/var/lib/cloud/scripts/per-boot/l4mlb-deadman
+          chmod 755 /var/lib/cloud/scripts/per-boot/l4mlb-deadman
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-be3"}
+        - {Key: l4mlb-role, Value: be3}
+        - !If [IsCanvas, {Key: l4mlb-canvas, Value: !Ref AWS::StackName}, !Ref AWS::NoValue]
 
   # Dormant at the start of the demo: the scale-out scene starts its responder.
   Be4Instance:
     Type: AWS::EC2::Instance
-    Condition: IsFull
+    Condition: HasBe2To4
     Properties:
       ImageId: !Ref ImageId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyName
-      InstanceInitiatedShutdownBehavior: terminate
-      CreditSpecification: !If [IsBurstable, {CPUCredits: standard}, !Ref AWS::NoValue]
+      InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
+      MetadataOptions: {HttpTokens: required}
+      CreditSpecification: !If [IsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
       SourceDestCheck: false
       NetworkInterfaces:
         - {DeviceIndex: "0", SubnetId: !Ref Subnet, PrivateIpAddress: 10.99.1.34,
@@ -351,7 +465,39 @@ Resources:
           #!/bin/bash
           echo be4 > /etc/l4mlb-role
           shutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-terminate"
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-be4"}, {Key: l4mlb-role, Value: be4}]
+          printf '#!/bin/sh\nshutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-stop"\n' >/var/lib/cloud/scripts/per-boot/l4mlb-deadman
+          chmod 755 /var/lib/cloud/scripts/per-boot/l4mlb-deadman
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-be4"}
+        - {Key: l4mlb-role, Value: be4}
+        - !If [IsCanvas, {Key: l4mlb-canvas, Value: !Ref AWS::StackName}, !Ref AWS::NoValue]
+
+  Be5Instance:
+    Type: AWS::EC2::Instance
+    Condition: IsCanvas
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
+      MetadataOptions: {HttpTokens: required}
+      CreditSpecification: !If [IsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
+      SourceDestCheck: false
+      NetworkInterfaces:
+        - {DeviceIndex: "0", SubnetId: !Ref Subnet, PrivateIpAddress: 10.99.1.35,
+           GroupSet: [!Ref SecurityGroup], AssociatePublicIpAddress: true,
+           DeleteOnTermination: true}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          echo be5 > /etc/l4mlb-role
+          shutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-terminate"
+          printf '#!/bin/sh\nshutdown -h +${AutoTerminateMinutes} "l4-maglev-lb auto-stop"\n' >/var/lib/cloud/scripts/per-boot/l4mlb-deadman
+          chmod 755 /var/lib/cloud/scripts/per-boot/l4mlb-deadman
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-be5"}
+        - {Key: l4mlb-role, Value: be5}
+        - !If [IsCanvas, {Key: l4mlb-canvas, Value: !Ref AWS::StackName}, !Ref AWS::NoValue]
 
   MonInstance:
     Type: AWS::EC2::Instance
@@ -362,7 +508,7 @@ Resources:
       KeyName: !Ref KeyName
       IamInstanceProfile: !Ref MonInstanceProfile
       InstanceInitiatedShutdownBehavior: terminate
-      CreditSpecification: !If [IsBurstable, {CPUCredits: standard}, !Ref AWS::NoValue]
+      CreditSpecification: !If [IsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]
       NetworkInterfaces:
         - {DeviceIndex: "0", SubnetId: !Ref Subnet, PrivateIpAddress: 10.99.1.40,
            GroupSet: [!Ref SecurityGroup], AssociatePublicIpAddress: true,
@@ -379,17 +525,13 @@ Outputs:
   Profile: {Value: !Ref Profile}
   Vip: {Value: 10.200.0.10}
   FlowLogGroup: {Value: !Ref FlowLogGroup}
-  ClientPublicIp: {Value: !GetAtt ClientInstance.PublicIp}
   ClientInstanceId: {Value: !Ref ClientInstance}
-  LbPublicIp: {Value: !GetAtt LbInstance.PublicIp}
+  Client2InstanceId: {Condition: IsCanvas, Value: !Ref Client2Instance}
   LbInstanceId: {Value: !Ref LbInstance}
-  Be1PublicIp: {Value: !GetAtt Be1Instance.PublicIp}
   Be1InstanceId: {Value: !Ref Be1Instance}
-  Be2PublicIp: {Condition: IsFull, Value: !GetAtt Be2Instance.PublicIp}
-  Be2InstanceId: {Condition: IsFull, Value: !Ref Be2Instance}
-  Be3PublicIp: {Condition: IsFull, Value: !GetAtt Be3Instance.PublicIp}
-  Be3InstanceId: {Condition: IsFull, Value: !Ref Be3Instance}
-  Be4PublicIp: {Condition: IsFull, Value: !GetAtt Be4Instance.PublicIp}
-  Be4InstanceId: {Condition: IsFull, Value: !Ref Be4Instance}
-  MonPublicIp: {Condition: IsFull, Value: !GetAtt MonInstance.PublicIp}
+  Be2InstanceId: {Condition: HasBe2To4, Value: !Ref Be2Instance}
+  Be3InstanceId: {Condition: HasBe2To4, Value: !Ref Be3Instance}
+  Be4InstanceId: {Condition: HasBe2To4, Value: !Ref Be4Instance}
+  Be5InstanceId: {Condition: IsCanvas, Value: !Ref Be5Instance}
+  CanvasOperatorRoleArn: {Condition: IsCanvas, Value: !GetAtt CanvasOperatorRole.Arn}
   MonInstanceId: {Condition: IsFull, Value: !Ref MonInstance}

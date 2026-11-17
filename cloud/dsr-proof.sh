@@ -69,17 +69,42 @@ until fetch_flowlogs && delivered; do
     sleep 30
 done
 
-echo "==> CloudWatch metrics for the same window"
-for r in $(roles); do
-    [[ "$r" == "mon" ]] && continue
-    period=300
-    [[ "$r" == "lb" ]] && period=60   # detailed monitoring on the LB only
-    for metric in NetworkOut NetworkPacketsOut; do
-        aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name "$metric" \
-            --dimensions "Name=InstanceId,Value=$(instance_id "$r")" \
-            --start-time "$(date -u -d "@$T0" +%FT%TZ)" --end-time "$(date -u -d "@$T1" +%FT%TZ)" \
-            --period "$period" --statistics Sum --output json >"$DIR/cw-$r-$metric.json" || true
+# A datapoint covers one whole period, so ask for the periods that cover the
+# window (a window shorter than a period would otherwise contain no datapoint),
+# plus the next one: an instance's samples can land a period late (observed: a
+# backend's packets from 03:14 counted in its 03:15 period, the client's in
+# 03:10). The referee only checks "at least", which extra periods cannot break.
+# EC2 publishes basic (5-min) metrics up to ~10 min late, so wait for them too.
+echo "==> CloudWatch metrics for the periods covering the window"
+fetch_metrics() {
+    local r metric period=300   # NetworkPackets* are 5-minute even with detailed monitoring
+    for r in $(roles); do
+        [[ "$r" == "mon" ]] && continue
+        for metric in NetworkOut NetworkPacketsOut; do
+            aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name "$metric" \
+                --dimensions "Name=InstanceId,Value=$(instance_id "$r")" \
+                --start-time "$(date -u -d "@$((T0 / period * period))" +%FT%TZ)" \
+                --end-time "$(date -u -d "@$(((T1 + period - 1) / period * period + period))" +%FT%TZ)" \
+                --period "$period" --statistics Sum --output json >"$DIR/cw-$r-$metric.json" || true
+        done
     done
+}
+metrics_complete() { # every role's last covering period has been published
+    python3 - "$DIR" "$T1" <<'PY'
+import json, pathlib, sys
+from datetime import datetime
+d, t1 = pathlib.Path(sys.argv[1]), int(sys.argv[2])
+for f in d.glob("cw-*.json"):
+    period = 300
+    stamps = [datetime.fromisoformat(p["Timestamp"]).timestamp()
+              for p in json.loads(f.read_text()).get("Datapoints", [])]
+    if not stamps or max(stamps) < t1 // period * period + period:
+        sys.exit(1)
+PY
+}
+until fetch_metrics && metrics_complete; do
+    [[ $(date +%s) -lt $deadline ]] || { echo "    some datapoints still missing; using what has arrived"; break; }
+    sleep 30
 done
 
 echo ""

@@ -15,6 +15,7 @@ REMOTE_RUN="l4mlb-run"       # logs and pid files on every host
 # Must match cloud/stack.yaml.
 VIP=10.200.0.10
 CLIENT_IP=10.99.1.10
+CLIENT2_IP=10.99.1.11   # canvas profile only
 LB_IP=10.99.1.20
 MON_IP=10.99.1.40
 BACKEND_PORT=9000
@@ -47,6 +48,15 @@ refresh_outputs() {
         --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' \
         | awk -F'\t' '{ printf "%s=%s\n", $1, $2 }' >"$RUN_DIR/outputs.env.tmp" \
         || die "could not read the outputs of stack $STACK (is it up? cloud/status.sh)"
+    # Public addresses change on every stop and start, so they come from EC2, not the
+    # stack ("None" while an instance is stopped): Be3PublicIp=..., ClientPublicIp=...
+    aws_q ec2 describe-instances \
+        --filters "Name=tag:aws:cloudformation:stack-name,Values=$STACK" Name=tag-key,Values=l4mlb-role \
+                  Name=instance-state-name,Values=pending,running,stopping,stopped \
+        --query 'Reservations[].Instances[].[Tags[?Key==`l4mlb-role`]|[0].Value,PublicIpAddress]' \
+        | awk -F'\t' '{ printf "%s%sPublicIp=%s\n", toupper(substr($1, 1, 1)), substr($1, 2), $2 }' \
+        >>"$RUN_DIR/outputs.env.tmp" \
+        || die "could not list the instances of stack $STACK"
     mv "$RUN_DIR/outputs.env.tmp" "$RUN_DIR/outputs.env"
     # shellcheck disable=SC1091
     source "$RUN_DIR/outputs.env"
@@ -64,13 +74,19 @@ load_outputs() {
 
 # Hosts that exist in the current profile, in a stable order.
 roles() {
-    if [[ "${Profile:-full}" == "full" ]]; then
-        echo client lb be1 be2 be3 be4 mon
-    else
-        echo client lb be1
-    fi
+    case "${Profile:-full}" in
+        full) echo client lb be1 be2 be3 be4 mon ;;
+        canvas) echo client client2 lb be1 be2 be3 be4 be5 ;;
+        *) echo client lb be1 ;;
+    esac
 }
-backend_count() { [[ "${Profile:-full}" == "full" ]] && echo 4 || echo 1; }
+backend_count() {
+    case "${Profile:-full}" in
+        full) echo 4 ;;
+        canvas) echo 5 ;;
+        *) echo 1 ;;
+    esac
+}
 
 # client -> Client, be3 -> Be3: the prefix of the stack output names.
 _out_prefix() { echo "${1^}"; }
@@ -79,6 +95,7 @@ instance_id() { local v; v="$(_out_prefix "$1")InstanceId"; echo "${!v:?no insta
 private_ip() {
     case "$1" in
         client) echo "$CLIENT_IP" ;;
+        client2) echo "$CLIENT2_IP" ;;
         lb) echo "$LB_IP" ;;
         mon) echo "$MON_IP" ;;
         be*) be_ip "${1#be}" ;;
@@ -91,8 +108,10 @@ SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=accept-new
           -o ControlMaster=auto -o "ControlPath=$RUN_DIR/cm-%C" -o ControlPersist=600
           -o ServerAliveInterval=15 -o LogLevel=ERROR -o BatchMode=yes)
 
-# ssh_to ROLE 'command string' - the command runs in ubuntu's login shell.
-ssh_to() { local r=$1; shift; ssh "${SSH_OPTS[@]}" "ubuntu@$(public_ip "$r")" "$@"; }
+# ssh_to ROLE 'command string' - the command runs in ubuntu's login shell, with
+# stdin from /dev/null (-n): otherwise a remote process that reads stdin would
+# wait on the caller's terminal or pipe, which may never close.
+ssh_to() { local r=$1; shift; ssh -n "${SSH_OPTS[@]}" "ubuntu@$(public_ip "$r")" "$@"; }
 scp_to() { local r=$1 src=$2 dst=$3; scp -q "${SSH_OPTS[@]}" "$src" "ubuntu@$(public_ip "$r"):$dst"; }
 scp_from() { local r=$1 src=$2 dst=$3; scp -q "${SSH_OPTS[@]}" "ubuntu@$(public_ip "$r"):$src" "$dst"; }
 
@@ -111,7 +130,9 @@ wait_ssh() { # ROLE: waits up to ~5 min for SSH and for cloud-init to finish
 # A command that starts with "sudo " runs as root (sudo relays TERM/INT to it).
 rstart() {
     local r=$1 name=$2 cmd=$3
-    ssh_to "$r" "mkdir -p ~/$REMOTE_RUN && cd ~/$REMOTE_REPO && \
+    # Only the nohup goes to the background: "a && b && nohup c &" would background
+    # the whole list as a subshell that keeps ssh's stdout open, so ssh never returns.
+    ssh_to "$r" "mkdir -p ~/$REMOTE_RUN && cd ~/$REMOTE_REPO || exit 1; \
         nohup $cmd >~/$REMOTE_RUN/$name.log 2>&1 </dev/null & echo \$! >~/$REMOTE_RUN/$name.pid"
 }
 

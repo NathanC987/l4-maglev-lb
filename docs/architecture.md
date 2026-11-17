@@ -43,7 +43,11 @@ replies directly to the client.
 
 Conntrack is checked *before* the Maglev table on every packet. A hit means the flow
 keeps its already-chosen backend even if the table has since been regenerated; a miss
-triggers a fresh Maglev lookup and a new conntrack entry.
+triggers a fresh Maglev lookup and a new conntrack entry. One exception: a TCP SYN
+(a new connection) whose entry points at a backend that has gone down gets a fresh
+Maglev pick and the entry is re-pinned. That happens when a client reuses a source
+port within conntrack's idle timeout. Any other packet for such a flow is dropped
+and counted as `backend_unhealthy`, since that connection died with its backend.
 
 ## Modules
 

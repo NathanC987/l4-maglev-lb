@@ -8,10 +8,15 @@
 #define CONFIG_MAX_BACKENDS 64u
 #define CONFIG_IFACE_LEN 16u
 #define CONFIG_ADMIN_FIFO_LEN 256u
+#define CONFIG_MAC_LEN 6u
 
 struct config_backend {
     uint32_t addr; /* opaque network-byte-order IPv4 */
     uint16_t port; /* host byte order */
+    /* From --backend IP:PORT@MAC: skips ARP for this backend, so it may be powered
+     * off when maglev-lb starts (see docs/cloud.md, the canvas on AWS). */
+    bool has_mac;
+    uint8_t mac[CONFIG_MAC_LEN];
 };
 
 struct config {

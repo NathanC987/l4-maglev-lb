@@ -202,6 +202,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self._call(self.server.bridge.reset_session))
             elif route == ("POST", "/api/v1/lb/restart"):
                 self._json(202, self._call(self.server.bridge.request_lb_restart))
+            elif route == ("POST", "/api/v1/cloud/stop") and hasattr(self.server.bridge, "request_cloud_stop"):
+                if self._read_json() is not None:
+                    self._json(202, self._call(self.server.bridge.request_cloud_stop))
             else:
                 self._error(404, "no such endpoint")
         except schema.ValidationError as e:

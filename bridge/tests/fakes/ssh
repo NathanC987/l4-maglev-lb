@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Stands in for ssh in test_cloud_e2e.py: runs the remote command on this machine, with
+the paths and addresses that only exist on AWS rewritten. stdin and stdout pass straight
+through, so the real service_server.py, load_client.py and lb_agent.py run unmodified
+behind the same pipes."""
+import json
+import os
+import re
+import sys
+
+home = os.environ["HOME"]
+with open(os.path.join(home, "ssh.json")) as f:
+    cfg = json.load(f)
+args = sys.argv[1:]
+control, master, exit_master, host, rest = None, False, False, None, []
+i = 0
+while i < len(args):
+    a = args[i]
+    if a in ("-F", "-i"):
+        i += 2
+        continue
+    if a == "-o":
+        if args[i + 1].startswith("ControlPath="):
+            control = args[i + 1].split("=", 1)[1]
+        i += 2
+        continue
+    if a == "-O":
+        exit_master = True
+        i += 2
+        continue
+    if a == "-M":
+        master = True
+    if a in ("-T", "-f", "-N", "-M"):
+        i += 1
+        continue
+    host, rest = a, args[i + 1:]
+    break
+with open(os.path.join(home, "ssh.log"), "a") as log:
+    log.write(json.dumps({"host": host, "master": master, "exit": exit_master, "remote": rest}) + "\n")
+if not host.startswith("ubuntu@192.0.2."):
+    sys.exit(255)
+if exit_master or master:
+    if master:
+        open(control, "w").close()
+    sys.exit(0)
+remote = rest[0]
+base = cfg["port_base"]
+if "service_server.py" in remote:
+    slot = int(re.search(r"--slot (\d+)", remote).group(1))
+    remote = re.sub(r"--port 9000", f"--port {base + slot}", remote)
+if "load_client.py" in remote:
+    remote = re.sub(r"--port 9000", f"--port {base}", remote)
+    remote = re.sub(r"--vip \S+", "--vip 127.0.0.1", remote)
+    remote = re.sub(r"--src-ip \S+", "--src-ip 127.0.0.1", remote)
+remote = remote.replace("/home/ubuntu/l4-maglev-lb/bridge", cfg["bridge_dir"])
+remote = remote.replace("/home/ubuntu/l4-maglev-lb/build/maglev-lb", cfg["fake_lb"])
+remote = remote.replace("/home/ubuntu/l4mlb-run", cfg["run_dir"])
+if "lb_agent.py" in remote:
+    remote = remote.replace("--director-ip 10.99.1.20", "--director-ip 127.0.0.1")
+    remote += f" --metrics-port {cfg['metrics_port']} --iface lo"
+remote = remote.replace("sudo -n ", "")
+remote = re.sub(r"shutdown -h \+\d+ \S+", "true", remote)
+remote = re.sub(r"/home/ubuntu/l4-maglev-lb/cloud/hostnet/\S+( .*)?$", "true", remote)
+remote = re.sub(r"ip link set gre1 \w+", "true", remote)
+with open(os.path.join(home, "ssh.log"), "a") as log:
+    log.write(json.dumps({"ran": remote}) + "\n")
+os.execvp("bash", ["bash", "-c", remote])

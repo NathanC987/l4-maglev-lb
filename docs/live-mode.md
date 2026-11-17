@@ -33,6 +33,9 @@ So when a backend "saturates", that is a configured limit being hit by real
 traffic. When the load balancer keeps routing to a crashed backend for a second,
 that is the real health checker's real detection delay.
 
+The canvas can also drive real EC2 instances, one per node, instead of local
+namespaces: see "The live canvas on AWS" in [`cloud.md`](cloud.md).
+
 ## Running it
 
 Needs everything the bench topology needs (see

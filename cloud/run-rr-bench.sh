@@ -4,7 +4,7 @@
 # percentiles), what maglev-lb spent (datapath CPU from schedstat, drops), and
 # whether AWS itself shaped the traffic (ENA *_allowance_exceeded counters).
 #
-#   cloud/run-rr-bench.sh [RPS...]        default: 100 250 500 1000 1500 2000
+#   cloud/run-rr-bench.sh [RPS...]        default: 100 500 1000 2000 3000 4000 6000 8000
 #
 # Every request opens a new TCP connection, so every request is a new flow
 # through the Maglev lookup and the conntrack insert. Backends get ample
@@ -17,7 +17,7 @@ require_tools
 load_outputs
 
 STEPS=("$@")
-[[ ${#STEPS[@]} -gt 0 ]] || STEPS=(100 250 500 1000 1500 2000)
+[[ ${#STEPS[@]} -gt 0 ]] || STEPS=(100 500 1000 2000 3000 4000 6000 8000)
 STEP_S="${STEP_S:-30}"
 WARMUP_S="${WARMUP_S:-5}"
 NBE="$(backend_count)"
@@ -35,6 +35,13 @@ trap 'stop_all_processes' EXIT
 
 echo "==> Is the environment fit to measure?"
 require_credits 15 lb client
+# Python backends at these rates go well past a T3's baseline: in standard mode,
+# without credits, they would be what the sweep measures.
+for i in $(seq 1 "$NBE"); do
+    mode="$(aws_q ec2 describe-instance-credit-specifications --instance-ids "$(instance_id "be$i")" \
+        --query 'InstanceCreditSpecifications[0].CpuCredits' 2>/dev/null || true)"
+    if [[ "$mode" == "standard" ]]; then require_credits 15 "be$i"; else echo "    be$i: CPU credits ${mode:-n/a}"; fi
+done
 PROCS="$(ssh_to client nproc)"
 echo "    client: $PROCS load-generator processes (one per vCPU)"
 
@@ -50,13 +57,20 @@ lb_cpu_ns() {
         sudo awk '{ print \$1 }' /proc/\$p/task/\$p/schedstat"
 }
 
+# AWS shaping anywhere on the path, including the backends' replies.
+ena_total() {
+    local r
+    for r in lb client $(for i in $(seq 1 "$NBE"); do echo "be$i"; done); do ena_allowances "$r"; done \
+        | awk '/_exceeded/ { s += $2 } END { print s + 0 }'
+}
+
 echo "==> Sweep: ${STEPS[*]} req/s, ${STEP_S}s each"
 printf '| offered req/s | ok req/s | failed | p50 ms | p99 ms | LB datapath CPU | LB drops/s | ENA allowance hits |\n' >"$OUT/summary.md"
 printf '|---|---|---|---|---|---|---|---|\n' >>"$OUT/summary.md"
 for rps in "${STEPS[@]}"; do
     per=$(awk "BEGIN { printf \"%.1f\", $rps / $PROCS }")
     echo "--- $rps req/s ($PROCS x $per) ---"
-    ena0="$( (ena_allowances lb; ena_allowances client) | awk '{ s += $2 } END { print s + 0 }')"
+    ena0="$(ena_total)"
     read -r cpu0 dp0 < <(lb_cpu_ns)
     drops0="$(lb_metrics | grep -oP '^maglev_lb_drops_total\{[^}]*\} \K[0-9]+' | awk '{ s += $1 } END { print s + 0 }')"
     t0=$(date +%s.%N)
@@ -67,7 +81,7 @@ for rps in "${STEPS[@]}"; do
     t1=$(date +%s.%N)
     read -r cpu1 dp1 < <(lb_cpu_ns)
     drops1="$(lb_metrics | grep -oP '^maglev_lb_drops_total\{[^}]*\} \K[0-9]+' | awk '{ s += $1 } END { print s + 0 }')"
-    ena1="$( (ena_allowances lb; ena_allowances client) | awk '{ s += $2 } END { print s + 0 }')"
+    ena1="$(ena_total)"
 
     python3 "$CLOUD_DIR/rrstats.py" "$OUT"/client-"$rps"-*.log --skip-s "$WARMUP_S" >"$OUT/step-$rps.json"
     python3 - "$OUT/step-$rps.json" "$rps" "$t0" "$t1" "$cpu0" "$cpu1" "$dp0" "$dp1" \

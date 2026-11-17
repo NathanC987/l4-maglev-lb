@@ -9,6 +9,10 @@ function(l4mlb_unit_test name)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
+l4mlb_unit_test(test_config
+    ${CMAKE_SOURCE_DIR}/src/config/config.c
+)
+
 l4mlb_unit_test(test_maglev_table
     ${CMAKE_SOURCE_DIR}/src/maglev/maglev_table.c
     ${CMAKE_SOURCE_DIR}/src/maglev/hash.c

@@ -1,6 +1,7 @@
 #ifndef L4MLB_NET_FLOW_H
 #define L4MLB_NET_FLOW_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -25,6 +26,7 @@ struct flow_extract_result {
     struct flow_key key;
     size_t ip_offset;   /* byte offset of the IPv4 header within buf */
     size_t ip_total_len; /* IPv4 total_length as declared in the header (validated to fit) */
+    bool tcp_syn;        /* a TCP SYN without ACK: the first packet of a new connection */
 };
 
 /* Runs the full L2/L3/L4 parse chain (Ethernet -> IPv4 -> TCP/UDP) over a raw

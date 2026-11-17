@@ -28,6 +28,12 @@ int conntrack_lookup(struct conntrack_table *ct, const struct flow_key *key, uin
 int conntrack_insert(struct conntrack_table *ct, const struct flow_key *key, int32_t backend_id,
                       uint64_t now_ns);
 
+/* Moves an existing entry for key to backend_id and refreshes it. Returns 1 if
+ * there was one, 0 if not. For a new connection that reuses the 5-tuple of a
+ * flow still pinned to a backend that has since gone (see datapath.c). */
+int conntrack_repin(struct conntrack_table *ct, const struct flow_key *key, int32_t backend_id,
+                     uint64_t now_ns);
+
 typedef void (*conntrack_evict_fn)(int32_t backend_id, void *ctx);
 
 /* Sweeps up to max_buckets_this_tick buckets (starting from an internal

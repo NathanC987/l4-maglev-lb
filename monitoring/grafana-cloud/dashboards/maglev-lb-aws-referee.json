@@ -1,6 +1,6 @@
 {
   "uid": "maglev-lb-aws-referee",
-  "title": "L4 Maglev — AWS as referee",
+  "title": "L4 Maglev \u2014 AWS as referee",
   "id": null,
   "schemaVersion": 39,
   "version": 1,
@@ -60,8 +60,8 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "GRE packets the LB forwarded, per minute: maglev-lb's count vs AWS's",
-      "description": "maglev-lb counts each packet it encapsulates and sends to a backend. AWS counts every packet leaving the LB's network interface, which also includes the host's own traffic (health checks, SSH, Prometheus scrapes), so its line sits a small, steady amount above. The exact per-packet check is cloud/dsr-proof.sh, which counts only GRE in the VPC Flow Logs.",
+      "title": "GRE packets the LB forwarded, per 5 minutes: maglev-lb's count vs AWS's",
+      "description": "maglev-lb counts each packet it encapsulates and sends to a backend. AWS counts every packet leaving the LB's network interface, which also includes the host's own traffic (health checks, SSH, Prometheus scrapes), so its line sits a small, steady amount above. The exact per-packet check is cloud/dsr-proof.sh, which counts only GRE in the VPC Flow Logs. AWS publishes NetworkPacketsOut only every 5 minutes, even with detailed monitoring on, so its line is a step behind.",
       "datasource": {
         "type": "datasource",
         "uid": "-- Mixed --"
@@ -73,7 +73,7 @@
             "type": "prometheus",
             "uid": "prometheus-cloud"
           },
-          "expr": "sum(increase(maglev_lb_tx_packets_total[1m]))",
+          "expr": "sum(increase(maglev_lb_tx_packets_total[5m]))",
           "legendFormat": "maglev-lb forwarded"
         },
         {
@@ -90,7 +90,7 @@
             "InstanceId": "__LB__"
           },
           "statistic": "Sum",
-          "period": "60",
+          "period": "300",
           "matchExact": true,
           "metricQueryType": 0,
           "metricEditorMode": 0,
@@ -390,8 +390,8 @@
     {
       "id": 7,
       "type": "table",
-      "title": "VPC Flow Logs: what each host sent, and with what source address",
-      "description": "pktsrc is the source address written in the packets; proto 47 is GRE, 6 is TCP. The LB sends only GRE, from its own address. The backends send TCP whose source is the VIP 10.200.0.10: the replies, going straight to the client.",
+      "title": "VPC Flow Logs: what each host sent and received, by the packets' source address",
+      "description": "pktsrc is the source address written in the packets; proto 47 is GRE, 6 is TCP. The LB sends only GRE, from its own address. The client receives TCP whose source is the VIP 10.200.0.10: the replies, which the LB never sent. AWS does not log the backends' VIP-sourced egress (their interfaces show SKIPDATA instead), so who sent the replies is in the bytes-per-host panel, from CloudWatch's own counters.",
       "datasource": {
         "type": "cloudwatch",
         "uid": "cloudwatch"
@@ -412,7 +412,7 @@
           "queryMode": "Logs",
           "region": "default",
           "id": "",
-          "expression": "parse @message \"* * * * * * * * * * * * * * * * *\" as version, eni, instance, dir, srcaddr, dstaddr, pktsrc, pktdst, srcport, dstport, proto, packets, bytes, fstart, fend, action, status\n| filter dir = \"egress\" and action = \"ACCEPT\"\n| fields replace(replace(replace(replace(replace(replace(instance, \"__LB__\", \"lb\"), \"__CLIENT__\", \"client\"), \"__BE1__\", \"be1\"), \"__BE2__\", \"be2\"), \"__BE3__\", \"be3\"), \"__BE4__\", \"be4\") as host\n| stats sum(bytes) as bytes_sent, sum(packets) as packets_sent by host, proto, pktsrc\n| sort bytes_sent desc\n| limit 30",
+          "expression": "parse @message \"* * * * * * * * * * * * * * * * *\" as version, eni, instance, dir, srcaddr, dstaddr, pktsrc, pktdst, srcport, dstport, proto, packets, bytes, fstart, fend, action, status\n| filter action = \"ACCEPT\"\n| fields replace(replace(replace(replace(replace(replace(instance, \"__LB__\", \"lb\"), \"__CLIENT__\", \"client\"), \"__BE1__\", \"be1\"), \"__BE2__\", \"be2\"), \"__BE3__\", \"be3\"), \"__BE4__\", \"be4\") as host\n| stats sum(bytes) as total_bytes, sum(packets) as total_packets by host, dir, proto, pktsrc\n| sort total_bytes desc\n| limit 30",
           "logGroups": [
             {
               "arn": "__LOG_GROUP_ARN__",
@@ -424,6 +424,7 @@
           ],
           "statsGroups": [
             "host",
+            "dir",
             "proto",
             "pktsrc"
           ]

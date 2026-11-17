@@ -205,8 +205,10 @@ int main(int argc, char **argv) {
         }
 
         uint8_t mac[ETH_ADDR_LEN];
-        if (arp_resolve(cfg.iface, cfg.backends[i].addr, iface_mac, cfg.director_ip, mac,
-                         ARP_TIMEOUT_MS) != 0) {
+        if (cfg.backends[i].has_mac) {
+            memcpy(mac, cfg.backends[i].mac, ETH_ADDR_LEN);
+        } else if (arp_resolve(cfg.iface, cfg.backends[i].addr, iface_mac, cfg.director_ip, mac,
+                                ARP_TIMEOUT_MS) != 0) {
             print_ip("main: ARP resolution failed for backend ", cfg.backends[i].addr);
             fprintf(stderr, "\n");
             goto cleanup;
