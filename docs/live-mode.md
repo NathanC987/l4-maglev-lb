@@ -188,23 +188,27 @@ translates each bridge snapshot into one, and some of the choices are not obviou
 
 ## Inside maglev-lb: the live tables
 
-Select the load balancer and press **Show its Maglev and conntrack tables**. A
-panel opens beside the canvas (which stays usable) and shows `maglev-lb`'s real
-tables, read once a second:
+Select the load balancer and press **Open its Maglev and conntrack tables**. A
+page opens over the canvas and shows `maglev-lb`'s real tables, read once a
+second; **Back to the canvas** (or the browser's Back button, or Escape) returns.
+The last table seen is kept, so you can go back, remove or drain a backend, and
+reopen the page to see what that rebuild moved.
 
-- **The Maglev lookup table**: all 65,537 slots as a 256-wide grid, one pixel per
-  slot, coloured by the backend that owns it. Point at a slot to read it; point at
-  a backend in the table below to see only its slots. When the table is rebuilt
-  (a backend added, removed, failed or drained), the slots that changed owner are
-  marked, and the panel counts them and compares the result with hash-mod-N. Removing
+- **The Maglev lookup table**: all 65,537 slots as a grid that fills most of the
+  page, one square per slot (a whole number of screen pixels each, as many columns
+  as fit), coloured by the backend that owns it. Point at a slot to read it; point
+  at a backend in the column on the right to see only its slots. When the table is
+  rebuilt (a backend added, removed, failed or drained), the slots that changed
+  owner are marked until you hide them, and the page counts them and compares the
+  result with hash-mod-N. Removing
   one of three backends, for example, moves the 21,845 slots it owned plus a
   handful of others (24 in one run: Maglev's small, bounded disruption), where hash mod N would move
   two thirds of all slots.
 - **Backends**: slots and share of the table, and connections pinned in conntrack,
   for each backend, including one that has left the table but still has pins.
-- **The connection tracking table**: the exact count, and the 16 most recently
-  active connections per backend, each with the slot its 5-tuple hashes to and its
-  idle time. A row is highlighted when its pin and the table disagree: a connection
+- **The connection tracking table**, under the grid: the exact count, and the 16
+  most recently active connections per backend, each with the slot its 5-tuple
+  hashes to and its idle time. A row is highlighted when its pin and the table disagree: a connection
   that stays on its old backend after a rebuild. Point at a row to find its slot on
   the grid.
 

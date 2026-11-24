@@ -247,7 +247,7 @@ executor (the reconciler, API and canvas are shared with local live mode).
   CPU back over that channel. Polling its HTTP exporter four times a second across
   the internet is too slow for the 0.5 s it allows.
 - `bridge/host_agent.py` reports each instance's CPU and network.
-- The load balancer's **Show its Maglev and conntrack tables** button shows the
+- The load balancer's **Open its Maglev and conntrack tables** button shows the
   real tables from `maglev-lb` on the LB instance, live: `lb_agent.py` reads them
   from `maglev-lb`'s `/tables` endpoint and sends them over the same SSH channel,
   the ~90 KB Maglev table only when it changes. See "Inside maglev-lb" in
