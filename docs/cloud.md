@@ -138,7 +138,7 @@ https://aws.amazon.com/free for your account before the first run.**
 | Public IPv4 | One per instance, for SSH and package installs | 750 h/month (legacy), or credits |
 | Data transfer | All traffic between hosts uses private IPs in one AZ | Free |
 | CloudWatch metrics | Basic 5-minute EC2 metrics on every host; 1-minute on the LB only (CPU and bytes; packet counts stay 5-minute) | Always free (basic metrics, 10 detailed metrics) |
-| CloudWatch API | Grafana's CloudWatch panels (refresh 1 min), `dsr-proof.sh` | `GetMetricData` is billed at about $0.01 per 1,000 metrics, a few cents per hour of dashboard. This is the one item not strictly free. |
+| CloudWatch API | Grafana's CloudWatch panels (refresh 1 min), `dsr-proof.sh`; on the canvas, the bridge's reads for its dashboard (only while it is open: well under a cent an hour) | `GetMetricData` is billed at about $0.01 per 1,000 metrics, a few cents per hour of dashboard. This is the one item not strictly free. |
 | CloudWatch Logs | VPC Flow Logs, 1-day retention, deleted with the stack | 5 GB/month ingestion. The streaming workload makes a few MB per run; the request/response sweep refuses to run with flow logs on |
 | CloudFormation, VPC, IAM | The stack itself | Free |
 
@@ -219,6 +219,7 @@ node's instance and that instance's own CPU and network use.
 ```sh
 cloud/canvas.sh up       # once: create the stack, install and build on every host, stop them all
 cloud/canvas.sh run      # prints a link; nothing on AWS starts until that page is open
+cloud/canvas.sh grafana  # optional, in another terminal: the dashboard at http://localhost:3001
 cloud/canvas.sh down     # delete it all, disks included
 ```
 
@@ -261,7 +262,7 @@ executor (the reconciler, API and canvas are shared with local live mode).
 | Risk | What stops it |
 |---|---|
 | A bug starts too much | The bridge runs as `CanvasOperatorRole`, with 1-hour credentials that can only start and stop instances tagged for this stack, and describe them. It cannot launch one, so AWS itself enforces the pool |
-| Spending runs on | Everything stops at `--budget-usd` (default $3 of estimated spend), after `--max-minutes` (120), 10 minutes after the last browser tab closes, from the canvas's "Stop all on AWS" button, or when the bridge exits (Ctrl-C included) |
+| Spending runs on | Everything stops at `--budget-usd` (default $3 of estimated spend), after `--max-minutes` (120), 10 minutes after the last browser tab closes, with `cloud/canvas.sh stop`, or when the bridge exits (Ctrl-C included) |
 | The laptop dies | Each running instance is told to shut down in 20 minutes, and only a live bridge keeps pushing that back. A per-boot dead-man switch (90 minutes) covers an instance started some other way. Shutting down stops these instances; it doesn't terminate them |
 | The browser is hostile | Same API rules as local live mode: loopback only, a token, strict validation. No canvas id or label reaches an AWS call or a shell. Remote commands are fixed paths plus validated numbers, each quoted |
 | A host is impersonated | SSH host keys are recorded per instance id during `canvas.sh up` and checked strictly afterwards, though a stop and start changes the public address. SSH is open to your IP only, and IMDSv2 is required |
@@ -283,7 +284,7 @@ state with EC2 directly. The real canvas then drove it from a headless browser.
 | Six backends on the canvas | Five served; the sixth showed as pending; EC2 ran exactly 5 backend instances |
 | Delete the LB, then add it back | All 8 instances stopped within 84 s; from all stopped, traffic flowed again 24 s after adding it back. The VIP route recovers by itself after the LB instance stops and starts |
 | Open the real canvas | Its default design (3 backends) was serving on EC2 20 s later |
-| "Stop all on AWS" | The bridge stopped every instance, confirmed it with EC2 and exited 0 |
+| "Stop all on AWS" (a canvas button then; its API, `POST /api/v1/cloud/stop`, remains) | The bridge stopped every instance, confirmed it with EC2 and exited 0 |
 
 | Offered req/s | OK req/s | Failed/s | p99 ms | be1 CPU | be2 CPU | Client CPU | LB datapath |
 |---|---|---|---|---|---|---|---|
@@ -306,6 +307,45 @@ fresh Maglev pick and the entry is re-pinned. Packets of established connections
 a dead backend are still dropped. Rerun under the same 1,200 req/s: failures only
 in the 3 s before detection, then none for the 19 s the backend stayed down.
 
+### Grafana for the canvas
+
+The canvas profile's 8 instances use the whole 16-vCPU quota, so there is no room
+for the monitoring host. Grafana and Prometheus run in Docker on the machine that
+runs the bridge instead, listening on 127.0.0.1 only:
+
+```sh
+cloud/canvas.sh run        # as usual, and open the canvas
+cloud/canvas.sh grafana    # another terminal; then http://localhost:3001
+cloud/canvas.sh grafana-down
+```
+
+The first `grafana` pulls `grafana/grafana:11.3.0` and `prom/prometheus:v2.55.0`.
+Prometheus scrapes the bridge every 2 s at `127.0.0.1:9109/metrics`
+(`bridge/promexport.py`, `--metrics-port`, 0 turns it off): read-only, no token,
+Host-checked, rendered from the same snapshot the canvas gets, so the two always
+agree. The dashboard, **"L4 Maglev — live canvas on AWS"**, has five rows:
+
+- **Right now**: offered load, OK and failed requests, system p99, pinned
+  connections, Maglev table generation, instances running, estimated spend.
+- **Traffic**: what the canvas shows, over time, per client and per backend.
+- **maglev-lb**: packets, conntrack hits and misses, pinned connections per
+  backend, each backend's health in `maglev-lb` (up, draining, down), drops, CPU.
+- **EC2 instances, measured on each instance**: CPU and bytes sent per instance
+  (`host_agent.py`), the instance list, the cost estimate, budget and time left.
+- **AWS's own view: CloudWatch**: the same instances' CPU, bytes and packets sent,
+  as the hypervisor measured them.
+
+The CloudWatch row is read by the bridge (`bridge/cloudwatch.py`) with
+`CanvasOperatorRole`, which may call `cloudwatch:GetMetricData` and nothing else
+new, so Grafana holds no AWS credentials. It asks only while Prometheus has scraped
+in the last 2 minutes, only about running instances, and for the 5-minute metrics
+only every 5 minutes. It is late by a minute or more, and only the LB has 1-minute
+metrics. `canvas.sh run` redeploys the template, so the permission arrives on the
+first run after pulling this; until then the row says "not reading".
+
+The canvas still has to be open: with no canvas tab the load pauses after 10 s and
+everything stops 10 minutes later, whatever Grafana is doing.
+
 ## Files
 
 | File | What it is |
@@ -320,6 +360,7 @@ in the 3 s before detection, then none for the 19 s the backend stayed down.
 | `cloud/dsr-proof.sh`, `referee.py` | AWS as referee |
 | `cloud/run-cloud-smoke-test.sh` | All of it, with assertions |
 | `cloud/canvas.sh`, `bridge/cloud_bridge.py`, `cloud_hosts.py`, `lb_agent.py`, `host_agent.py` | The live canvas on AWS |
+| `bridge/promexport.py`, `cloudwatch.py`, `monitoring/docker-compose-canvas.yml`, `prometheus-canvas.yml`, `grafana-canvas/` | The canvas's Grafana dashboard, run on your machine |
 | `cloud/tests/` | Unit tests (no AWS needed): `python3 -m unittest discover -s cloud/tests` |
 | `monitoring/docker-compose-cloud.yml`, `prometheus-cloud.yml`, `grafana-cloud/` | The monitoring stack on mon, with the two cloud dashboards |
 
@@ -442,7 +483,8 @@ referee's 1-minute packet counts (both in [What AWS forced](#what-aws-forced)), 
 - On AWS the canvas runs at most 5 backends and 2 clients, the pool that fits the
   16-vCPU quota. A higher quota and more instances in `cloud/stack.yaml` would raise
   that; nothing in the bridge is sized to it. The canvas profile has no monitoring
-  host and no flow logs, so there is no Grafana or referee there.
+  host and no flow logs, so there is no referee there, and its Grafana runs on your
+  machine (`cloud/canvas.sh grafana`).
 - The canvas's spend figure is an estimate from list prices: it leaves out T3 CPU
   above baseline in `unlimited` mode ($0.05 per vCPU-hour). AWS's bill is the real
   number.

@@ -32,6 +32,16 @@ elif call == "ec2 describe-instances":
               "Tags": [{"Key": "l4mlb-role", "Value": i["role"]}]}
              for k, i in db["instances"].items()]
     out = {"Reservations": [{"Instances": insts}]}
+elif call == "cloudwatch get-metric-data":
+    if db.get("cloudwatch") == "denied":
+        sys.exit("An error occurred (AccessDenied) when calling the GetMetricData operation")
+    qs = json.loads(args[args.index("--metric-data-queries") + 1])
+    stamp = time.strftime("%Y-%m-%dT%H:%M:00+00:00", time.gmtime(now - 120))
+    out = {"MetricDataResults": [
+        {"Id": q["Id"], "Label": q["MetricStat"]["Metric"]["MetricName"], "Timestamps": [stamp],
+         "Values": [42.0 if q["MetricStat"]["Metric"]["MetricName"] == "CPUUtilization"
+                    else 6000.0 * q["MetricStat"]["Period"]], "StatusCode": "Complete"}
+        for q in qs]}
 elif call in ("ec2 start-instances", "ec2 stop-instances"):
     for k in args[args.index("--instance-ids") + 1:args.index("--output")]:
         i = db["instances"][k]

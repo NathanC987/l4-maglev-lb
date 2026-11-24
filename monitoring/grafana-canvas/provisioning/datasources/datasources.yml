@@ -1,0 +1,14 @@
+apiVersion: 1
+
+datasources:
+  # Everything on the dashboard, CloudWatch included, comes through the bridge, so
+  # Grafana holds no AWS credentials.
+  - name: Prometheus (canvas)
+    uid: prometheus-canvas
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:9093
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 2s

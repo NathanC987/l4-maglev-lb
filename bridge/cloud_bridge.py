@@ -38,6 +38,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import livecommon as lc  # noqa: E402
 from children import BACKEND_PORT, BaseExecutor, Proc, backend_args, client_args  # noqa: E402
+import cloudwatch  # noqa: E402
+import promexport  # noqa: E402
 from cloud_hosts import HostManager  # noqa: E402
 from reconciler import Reconciler  # noqa: E402
 from httpapi import BridgeHTTPServer, Publisher  # noqa: E402
@@ -137,6 +139,10 @@ class AwsCli:
 
     def stop(self, ids):
         self._call(["ec2", "stop-instances", "--instance-ids", *checked_ids(ids)])
+
+    def metric_data(self, queries, start, end):
+        """CloudWatch GetMetricData (read-only), for the Grafana dashboard."""
+        return json.loads(self._call(cloudwatch.metric_data_args(queries, start, end)))
 
 
 def checked_ids(ids):
@@ -421,6 +427,11 @@ class CloudBridge(Bridge):
         self.converged = False
         self.session_began = time.monotonic()
         self.stop_reason = None
+        self.metrics_httpd = None
+        self.cw_targets = ()
+        self.cloudwatch = cloudwatch.CloudWatchPoller(
+            aws, lambda: self.cw_targets,
+            lambda: self.metrics_httpd is not None and self.metrics_httpd.scraped_within(cloudwatch.WATCH_S))
 
     # --- the LB, run by its agent --------------------------------------------------
     def lb_alive(self):
@@ -629,6 +640,9 @@ class CloudBridge(Bridge):
             rec = self.r.clients.get(cid)
             c["host"] = view(CLIENT_ROLES[rec.index]) if rec else None
         snap["lb"]["host"] = view("lb")
+        # What CloudWatch is asked about: instances that are up (read by its thread).
+        self.cw_targets = tuple(sorted((r, h.id) for r, h in hosts.items()
+                                       if h.state in ("pending", "running") and h.id))
         snap["cloud"] = {
             "provider": "aws", "region": self.args.region, "stack": self.args.stack,
             "maxBackends": self.args.slots, "maxClients": self.args.clients,
@@ -642,11 +656,29 @@ class CloudBridge(Bridge):
         }
         return snap
 
+    def start_metrics(self):
+        """The Grafana feed (bridge/promexport.py). Optional: a busy port costs only
+        the dashboard."""
+        if not self.args.metrics_port:
+            return
+        try:
+            self.metrics_httpd = promexport.MetricsServer(self.args.metrics_port, self.publisher,
+                                                          self.cloudwatch)
+        except OSError as e:
+            print(f"metrics for Grafana: port {self.args.metrics_port} unavailable ({e.strerror}); "
+                  "the dashboard will be empty", flush=True)
+            return
+        threading.Thread(target=self.metrics_httpd.serve_forever, daemon=True).start()
+        self.cloudwatch.start()
+        print(f"metrics for Grafana: http://127.0.0.1:{self.args.metrics_port}/metrics "
+              "(cloud/canvas.sh grafana)", flush=True)
+
     async def run(self):
         token = self.args.token or secrets.token_hex(16)
         httpd = BridgeHTTPServer(self.args.port, token, self.loop, self, self.publisher,
                                  self.args.static_dir, self.args.dev_origin)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.start_metrics()
         self.phase = "ready"
         print(f"live bridge ready: http://127.0.0.1:{self.args.port}/#token={token}", flush=True)
         print("Nothing on AWS starts until that page is open.", flush=True)
@@ -667,6 +699,9 @@ class CloudBridge(Bridge):
             self.publisher.publish(json.dumps(self.build_snapshot(), separators=(",", ":")).encode())
             self.publisher.close()
             httpd.shutdown()
+            if self.metrics_httpd is not None:
+                self.cloudwatch.stop.set()
+                self.metrics_httpd.shutdown()
             self.ex.stop_all()
             print("stopping every instance...", flush=True)
             leftover = await self.hosts.stop_all()
@@ -700,6 +735,9 @@ def parse_args():
                    help="stop everything after this long with no browser connected")
     p.add_argument("--stop-grace-s", type=float, default=60.0,
                    help="keep an instance nobody wants for this long before stopping it")
+    p.add_argument("--metrics-port", type=int, default=promexport.DEFAULT_PORT,
+                   help="serve read-only Prometheus metrics on 127.0.0.1:PORT for "
+                        "cloud/canvas.sh grafana (0: off)")
     p.add_argument("--token", help=argparse.SUPPRESS)  # for automated tests only
     p.add_argument("--token-file")
     p.add_argument("--record")
@@ -717,6 +755,8 @@ def parse_args():
         p.error("bad --role-arn")
     if not os.path.isfile(a.ssh_key):
         p.error(f"SSH key {a.ssh_key} not found")
+    if not 0 <= a.metrics_port <= 65535 or (a.metrics_port and a.metrics_port == a.port):
+        p.error("bad --metrics-port")
     if not 0 < a.budget_usd <= 50:
         p.error("--budget-usd must be in (0, 50]")
     if not 1 <= a.max_minutes <= 720:

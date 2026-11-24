@@ -80,3 +80,11 @@ monitoring_prometheus-bench-data`.
 See `docs/benchmarking.md` for what's on it (including the headline "DSR in action"
 panel, comparing the LB's own bandwidth against what the client actually receives)
 and how to run the scenario that feeds it.
+
+## The live canvas on AWS
+
+A third, separate stack, `docker-compose-canvas.yml` (Grafana on 3001, Prometheus on
+9093, both 127.0.0.1 only), shows the live canvas driving EC2: it scrapes the bridge's
+read-only metrics, which include CloudWatch's view of the instances. Start and stop it
+with `cloud/canvas.sh grafana` and `cloud/canvas.sh grafana-down`; see "Grafana for
+the canvas" in `docs/cloud.md`.

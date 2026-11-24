@@ -8,6 +8,9 @@
 #                           start the bridge and print the link. Nothing on AWS starts
 #                           until that page is open, and everything stops when it exits.
 #   cloud/canvas.sh stop    stop every instance (the bridge normally does this itself)
+#   cloud/canvas.sh grafana start Grafana + Prometheus in Docker on this machine, showing
+#                           the canvas, the instances and CloudWatch: http://localhost:3001
+#   cloud/canvas.sh grafana-down   stop them again
 #   cloud/canvas.sh down    delete the whole stack, volumes included
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -90,12 +93,32 @@ cmd_run() {
         --static-dir "$dist" "$@"
 }
 
+# Grafana and Prometheus for the canvas (monitoring/docker-compose-canvas.yml), on this
+# machine: the canvas profile has no room for a monitoring host. They read the bridge's
+# metrics on 127.0.0.1:9109, so they show something while cloud/canvas.sh run is going.
+GRAFANA_COMPOSE="$REPO_ROOT/monitoring/docker-compose-canvas.yml"
+
+cmd_grafana() {
+    command -v docker >/dev/null || die "Grafana runs in Docker, which is not installed here"
+    local pw="$RUN_DIR/grafana-canvas-admin-password"
+    if [[ ! -s "$pw" ]]; then
+        mkdir -p "$RUN_DIR"
+        (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(12))' >"$pw")
+    fi
+    GF_ADMIN_PASSWORD="$(cat "$pw")" docker compose -f "$GRAFANA_COMPOSE" up -d
+    echo "Grafana: http://localhost:3001  (no login needed to view; admin password in $pw)"
+    echo "It fills in while cloud/canvas.sh run is going and the canvas is open."
+    echo "Stop it with: cloud/canvas.sh grafana-down"
+}
+
 cmd="${1:-}"
 [[ $# -gt 0 ]] && shift
 case "$cmd" in
     up) cmd_up ;;
     run) cmd_run "$@" ;;
     stop) stop_all; "$CLOUD_DIR/status.sh" ;;
+    grafana) cmd_grafana ;;
+    grafana-down) GF_ADMIN_PASSWORD=unused docker compose -f "$GRAFANA_COMPOSE" down ;;
     down) "$CLOUD_DIR/down.sh"; rm -f "$CANVAS_KNOWN_HOSTS" ;;
-    *) sed -n '2,12p' "$0"; exit 2 ;;
+    *) sed -n '2,14p' "$0"; exit 2 ;;
 esac

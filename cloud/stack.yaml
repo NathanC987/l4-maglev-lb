@@ -262,7 +262,8 @@ Resources:
       Roles: [!Ref MonRole]
 
   # What the live canvas's bridge runs as: it may start and stop this stack's
-  # instances and read their state, and nothing else. It cannot launch an instance,
+  # instances, read their state and read CloudWatch metrics (for the Grafana
+  # dashboard), and nothing else. It cannot launch an instance,
   # so the pool in this template is a hard limit on how much a bug could spend.
   CanvasOperatorRole:
     Type: AWS::IAM::Role
@@ -287,6 +288,11 @@ Resources:
                   StringEquals: {"ec2:ResourceTag/l4mlb-canvas": !Ref AWS::StackName}
               - Effect: Allow
                 Action: ec2:DescribeInstances
+                Resource: "*"
+              # Read-only, for cloud/canvas.sh grafana (bridge/cloudwatch.py). It takes
+              # no resource or condition, so it covers any metric in this account.
+              - Effect: Allow
+                Action: cloudwatch:GetMetricData
                 Resource: "*"
 
   # ---- Instances --------------------------------------------------------------

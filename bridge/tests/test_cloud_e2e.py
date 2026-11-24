@@ -46,6 +46,7 @@ class Rig:
         self.dir = tempfile.TemporaryDirectory()
         self.home = self.dir.name
         self.port = free_port()
+        self.metrics_port = free_port()
         # Room for slots 1..5 above the base, which the fake client "connects" to.
         self.port_base = free_port() + 100
         run = os.path.join(self.home, "run")
@@ -65,7 +66,8 @@ class Rig:
         self.p = subprocess.Popen(
             [sys.executable, os.path.join(BRIDGE, "cloud_bridge.py"), "--stack", "t", "--region", "us-east-1",
              "--role-arn", ROLE, "--ssh-key", key, "--cloud-run-dir", os.path.join(self.home, "c"),
-             "--port", str(self.port), "--token", TOKEN, "--stop-grace-s", "1",
+             "--port", str(self.port), "--metrics-port", str(self.metrics_port),
+             "--token", TOKEN, "--stop-grace-s", "1",
              "--aws-bin", os.path.join(FAKES, "aws"), "--ssh-bin", os.path.join(FAKES, "ssh"), *extra],
             env={"PATH": os.environ["PATH"], "HOME": self.home}, stdout=self.err, stderr=self.err)
         self.wait(lambda: self._ok("/health"), 10, "the API")
@@ -283,6 +285,41 @@ class CanvasDrivesEc2(unittest.TestCase):
         again = r.api("GET", f"/lb/tables?gen={got['generation']}")
         self.assertNotIn("table", again)
         self.assertEqual(again["generation"], got["generation"])
+
+    def scrape(self, host=None):
+        r = self.rig
+        req = urllib.request.Request(f"http://127.0.0.1:{r.metrics_port}/metrics")
+        if host:
+            req.add_header("Host", host)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.read().decode()
+
+    def test_grafana_gets_the_canvas_and_cloudwatch(self):
+        r = self.rig
+        r.api("PUT", "/desired", doc(backends=("b1", "b2")))
+        r.wait(self.serving("b1", "b2"), 25, "both serving")
+        text = self.scrape()
+        self.assertIn('canvas_requests_per_second{result="offered"}', text)
+        self.assertIn(f'canvas_aws_instance_ready{{role="lb",instance_id="{r.ids["lb"]}",type="t3.micro"}} 1',
+                      text)
+        self.assertRegex(text, r'canvas_backend_lb_up\{backend="b1",host="be\d",addr="10\.99\.1\.3\d"\} 1')
+        # CloudWatch is read only once Grafana is scraping, through the role, about
+        # running instances only: the LB's 1-minute metrics and everyone's 5-minute ones.
+        r.wait(lambda: "canvas_cloudwatch_cpu_percent" in self.scrape(), 15, "CloudWatch")
+        text = self.scrape()
+        self.assertIn(f'canvas_cloudwatch_cpu_percent{{role="lb",instance_id="{r.ids["lb"]}"}} 42', text)
+        self.assertIn(f'canvas_cloudwatch_network_out_bytes_per_second{{role="lb",instance_id="{r.ids["lb"]}"}} 6000',
+                      text)
+        self.assertIn('canvas_cloudwatch_ok{state="ok"} 1', text)
+        cw = [c for c in r.aws_calls() if c["call"] == "cloudwatch get-metric-data"]
+        self.assertTrue(cw and all(c["token"] == "tok" for c in cw))
+        asked = {d["Value"] for c in cw for q in json.loads(c["args"][c["args"].index("--metric-data-queries") + 1])
+                 for d in q["MetricStat"]["Metric"]["Dimensions"]}
+        self.assertNotIn(r.ids["be5"], asked, "a stopped instance is never asked about")
+        # Read-only, and only for a Host naming it.
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            self.scrape(host="evil.example:80")
+        self.assertEqual(e.exception.code, 421)
 
     def test_load_waits_for_the_lb(self):
         r = self.rig
