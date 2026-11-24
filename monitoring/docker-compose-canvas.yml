@@ -5,6 +5,11 @@
 # the canvas's numbers, each instance's own CPU and network, and CloudWatch's view.
 # Both listen on 127.0.0.1 only. Ports differ from docker-compose.yml's (3000/9090)
 # so the two can run side by side.
+# A fixed project name: Compose otherwise names the project after the directory, and
+# a run from another checkout (or with -p) would then trip over these container
+# names instead of reusing them.
+name: maglev-lb-canvas
+
 services:
   prometheus:
     image: prom/prometheus:v2.55.0

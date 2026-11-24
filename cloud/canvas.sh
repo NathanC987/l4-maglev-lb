@@ -105,6 +105,19 @@ cmd_grafana() {
         mkdir -p "$RUN_DIR"
         (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(12))' >"$pw")
     fi
+    # Containers with these names that some other Compose project made (an older run,
+    # another checkout) block this one: say which, rather than Docker's "Conflict".
+    local c project stray=()
+    for c in maglev-lb-prometheus-canvas maglev-lb-grafana-canvas; do
+        project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null)" \
+            || continue
+        [[ "$project" == "maglev-lb-canvas" ]] || stray+=("$c")
+    done
+    if [[ ${#stray[@]} -gt 0 ]]; then
+        die "container(s) ${stray[*]} already exist from an earlier run. Remove them with
+    docker rm -f ${stray[*]}
+(this keeps their data volumes) and run cloud/canvas.sh grafana again"
+    fi
     GF_ADMIN_PASSWORD="$(cat "$pw")" docker compose -f "$GRAFANA_COMPOSE" up -d
     echo "Grafana: http://localhost:3001  (no login needed to view; admin password in $pw)"
     echo "It fills in while cloud/canvas.sh run is going and the canvas is open."
