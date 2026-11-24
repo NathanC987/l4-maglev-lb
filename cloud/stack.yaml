@@ -261,6 +261,27 @@ Resources:
     Properties:
       Roles: [!Ref MonRole]
 
+  # The LB instance's own role: Session Manager only, so the AWS console can open
+  # a terminal on it (EC2 -> the lb instance -> Connect -> Session Manager) and run
+  # maglev-view, with no SSH port opened. AWS's managed policy lets the instance's
+  # SSM agent register and carry sessions; it reads or changes nothing else.
+  LbRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+
+  LbInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref LbRole]
+
   # What the live canvas's bridge runs as: it may start and stop this stack's
   # instances, read their state and read CloudWatch metrics (for the Grafana
   # dashboard), and nothing else. It cannot launch an instance,
@@ -358,6 +379,7 @@ Resources:
       ImageId: !Ref ImageId
       InstanceType: !Ref MeasuredInstanceType
       KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref LbInstanceProfile
       InstanceInitiatedShutdownBehavior: !If [IsCanvas, stop, terminate]
       MetadataOptions: {HttpTokens: required}
       CreditSpecification: !If [MeasuredIsBurstable, {CPUCredits: !Ref CpuCredits}, !Ref AWS::NoValue]

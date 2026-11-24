@@ -221,7 +221,9 @@ The Maglev table (one byte per slot, ~90 KB as JSON) is resent only when its
 generation changes. The bridge serves it to the canvas as `GET /api/v1/lb/tables`;
 on AWS, `lb_agent.py` fetches it on the LB instance and sends it back over its SSH
 channel. To read it by hand on the LB host: `curl -s localhost:9105/tables` (ask
-twice: the first answer is `{"pending":true}` while the first copy is made).
+twice: the first answer is `{"pending":true}` while the first copy is made), or, for
+a picture, `maglev-view` (`cloud/maglev_view.py`), which is how the AWS console shows
+them: see "The tables in the AWS console" in [`cloud.md`](cloud.md).
 
 ## Conntrack and the 15 s timeout
 

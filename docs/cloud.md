@@ -307,6 +307,34 @@ fresh Maglev pick and the entry is re-pinned. Packets of established connections
 a dead backend are still dropped. Rerun under the same 1,200 req/s: failures only
 in the 3 s before detection, then none for the 19 s the backend stayed down.
 
+### The tables in the AWS console
+
+`maglev-view` shows `maglev-lb`'s live Maglev and conntrack tables in a terminal on
+the LB instance, and the AWS console can open that terminal:
+
+1. EC2 → Instances → the `…-lb` instance → **Connect** → **Session Manager** →
+   **Connect**.
+2. Type `maglev-view`. `q` quits, `m` shows or hides the slots the last rebuild
+   moved, `1`-`9` show one backend's slots only (`0` all), `[` and `]` page through
+   the table.
+
+It shows as many consecutive slots as fit, one coloured square each, in the
+canvas's backend colours; the shares, slot counts and pinned connections under it
+are exact. After a rebuild it says what moved, in the same words as the canvas's
+tables page, and lists first the connections still pinned to a backend their slot
+no longer points to. It reads `maglev-lb`'s `/tables` once a second, like the
+canvas does, so it shows something only while `maglev-lb` runs: on the canvas,
+while `cloud/canvas.sh run` is going and the design has a load balancer.
+`maglev-view --once --no-color` prints one frame, for a plain SSH session or a log.
+
+Session Manager needs no open port: the instance's SSM agent connects out to AWS.
+The LB instance has a role for this (`LbRole`) carrying only AWS's managed
+`AmazonSSMManagedInstanceCore` policy, and `cloud/deploy.sh` installs the viewer in
+`/usr/local/bin` (Session Manager's `ssm-user` cannot read `ubuntu`'s home) and
+restarts the agent. Session Manager itself is free. The agent registers a minute or
+so after the instance starts; until then the console's Connect page says it is not
+connected.
+
 ### Grafana for the canvas
 
 The canvas profile's 8 instances use the whole 16-vCPU quota, so there is no room
@@ -360,6 +388,7 @@ everything stops 10 minutes later, whatever Grafana is doing.
 | `cloud/dsr-proof.sh`, `referee.py` | AWS as referee |
 | `cloud/run-cloud-smoke-test.sh` | All of it, with assertions |
 | `cloud/canvas.sh`, `bridge/cloud_bridge.py`, `cloud_hosts.py`, `lb_agent.py`, `host_agent.py` | The live canvas on AWS |
+| `cloud/maglev_view.py` | `maglev-view`: the live tables in a terminal on the LB, for the AWS console |
 | `bridge/promexport.py`, `cloudwatch.py`, `monitoring/docker-compose-canvas.yml`, `prometheus-canvas.yml`, `grafana-canvas/` | The canvas's Grafana dashboard, run on your machine |
 | `cloud/tests/` | Unit tests (no AWS needed): `python3 -m unittest discover -s cloud/tests` |
 | `monitoring/docker-compose-cloud.yml`, `prometheus-cloud.yml`, `grafana-cloud/` | The monitoring stack on mon, with the two cloud dashboards |

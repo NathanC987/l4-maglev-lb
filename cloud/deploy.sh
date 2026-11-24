@@ -83,6 +83,17 @@ hostnet() {
 for_all hostnet "${ROLES[@]}"
 for r in "${ROLES[@]}"; do sed -n '$p' "$RUN_DIR/deploy-$r.log" | sed "s/^/    /"; done
 
+echo "==> maglev-view and Session Manager on lb"
+# Session Manager's user (ssm-user) cannot read ubuntu's home, so the viewer is
+# copied out of it. Canonical's images ship the SSM agent; it is restarted so it
+# picks up the instance role (cloud/stack.yaml: LbRole) without waiting to retry.
+ssh_to lb "set -e
+    sudo install -m 0755 ~/$REMOTE_REPO/cloud/maglev_view.py /usr/local/bin/maglev-view
+    snap list amazon-ssm-agent >/dev/null 2>&1 || sudo snap install amazon-ssm-agent --classic >/dev/null
+    sudo snap restart amazon-ssm-agent >/dev/null
+    echo \"maglev-view installed; SSM agent \$(snap services amazon-ssm-agent | awk 'NR==2 {print \$3}')\"" \
+    | sed "s/^/    /"
+
 if [[ " ${ROLES[*]} " == *" mon "* ]]; then
     echo "==> Prometheus + Grafana on mon"
     account="$(aws_q sts get-caller-identity --query Account)"
