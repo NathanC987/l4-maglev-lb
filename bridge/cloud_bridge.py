@@ -63,6 +63,7 @@ CREDS_SECONDS = 3600
 CREDS_REFRESH_S = 2700
 CONVERGE_TIMEOUT_S = 15.0
 LB_RETRY_S = 5.0
+TABLES_TIMEOUT_S = 3.0
 
 
 def backend_ip(slot):
@@ -413,6 +414,7 @@ class CloudBridge(Bridge):
                                  stop_grace_s=args.stop_grace_s, lease_min=LEASE_MIN)
         self.ex.hosts = self.hosts
         self.lb_agent = None
+        self.tables_wait = None
         self.lb_pid_remote = None
         self.lb_ready_at = None
         self.lb_retry_at = 0.0
@@ -463,6 +465,9 @@ class CloudBridge(Bridge):
             self.event("maglev-lb running on the LB host")
         elif kind == "exit":
             self.event(f"LB host: {msg.get('reason')}", "error")
+        elif kind == "tables":
+            if self.tables_wait is not None and not self.tables_wait.done():
+                self.tables_wait.set_result(msg.get("doc"))
         elif kind == "lb":
             s = msg["metrics"]
             s["backends"] = {int(k): v for k, v in s.get("backends", {}).items()}
@@ -512,6 +517,18 @@ class CloudBridge(Bridge):
                 for s in self.r.slots.values():
                     if s.owner is not None and (s.manual_drain or s.removing) and s.phase == "draining":
                         self.ex.admin("DRAIN", s.lb_id)
+
+    async def fetch_lb_tables(self, gen):
+        """One round trip to lb_agent.py, which asks maglev-lb on the LB host. Callers
+        that arrive while one is in flight share its answer."""
+        if self.tables_wait is None or self.tables_wait.done():
+            self.tables_wait = self.loop.create_future()
+            self.ex.send(self.lb_agent, {"op": "tables", "gen": gen})
+        return await asyncio.wait_for(asyncio.shield(self.tables_wait), TABLES_TIMEOUT_S)
+
+    def tables_source(self):
+        h = self.hosts.hosts.get("lb")
+        return {"where": "aws", "instance": h.id if h else None, "type": h.type if h else None}
 
     async def restart_lb(self):
         self.lb_restart_pending = False

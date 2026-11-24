@@ -122,6 +122,15 @@ class AgentCommands(unittest.TestCase):
                     {"op": "admin", "verb": "EXEC", "id": 1}, {"op": "x"}, [], "DRAIN 1"):
             self.assertIsNone(lb_agent.admin_line(bad, 5), json.dumps(bad))
 
+    def test_tables_requests(self):
+        self.assertEqual(lb_agent.tables_gen({"op": "tables", "gen": 4}), 4)
+        self.assertEqual(lb_agent.tables_gen({"op": "tables", "gen": 0}), 0)
+        # A bad generation asks for the whole table rather than being trusted in a URL.
+        for gen in (None, -1, True, "1; rm", 1.5):
+            self.assertIsNone(lb_agent.tables_gen({"op": "tables", "gen": gen}), repr(gen))
+        for other in ({"op": "admin"}, [], "tables"):
+            self.assertIs(lb_agent.tables_gen(other), False)
+
     def test_backend_spec_must_carry_a_mac(self):
         self.assertTrue(lb_agent.BACKEND_RE.match("10.99.1.31:9000@0a:00:00:00:00:01"))
         for bad in ("10.99.1.31:9000", "10.99.1.31:9000@0a:00", "x;y:9000@0a:00:00:00:00:01"):

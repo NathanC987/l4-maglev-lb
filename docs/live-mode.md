@@ -186,6 +186,39 @@ translates each bridge snapshot into one, and some of the choices are not obviou
 - A dead backend process reports zeros, not its last stats line. Failed health
   checks are shown per second, not as a lifetime total.
 
+## Inside maglev-lb: the live tables
+
+Select the load balancer and press **Show its Maglev and conntrack tables**. A
+panel opens beside the canvas (which stays usable) and shows `maglev-lb`'s real
+tables, read once a second:
+
+- **The Maglev lookup table**: all 65,537 slots as a 256-wide grid, one pixel per
+  slot, coloured by the backend that owns it. Point at a slot to read it; point at
+  a backend in the table below to see only its slots. When the table is rebuilt
+  (a backend added, removed, failed or drained), the slots that changed owner are
+  marked, and the panel counts them and compares the result with hash-mod-N. Removing
+  one of three backends, for example, moves the 21,845 slots it owned plus a
+  handful of others (24 in one run: Maglev's small, bounded disruption), where hash mod N would move
+  two thirds of all slots.
+- **Backends**: slots and share of the table, and connections pinned in conntrack,
+  for each backend, including one that has left the table but still has pins.
+- **The connection tracking table**: the exact count, and the 16 most recently
+  active connections per backend, each with the slot its 5-tuple hashes to and its
+  idle time. A row is highlighted when its pin and the table disagree: a connection
+  that stays on its old backend after a rebuild. Point at a row to find its slot on
+  the grid.
+
+Where the data comes from: `maglev-lb` serves `GET /tables` on its metrics port
+(`src/ui/inspector.c`). Only the datapath thread may touch either table, so the
+datapath copies them on its reaper tick, and only while someone has asked in the
+last 3 s: with nobody watching it costs one atomic load per tick. A copy walks every
+conntrack bucket, about 1 ms at the default 1M max flows, at most once a second.
+The Maglev table (one byte per slot, ~90 KB as JSON) is resent only when its
+generation changes. The bridge serves it to the canvas as `GET /api/v1/lb/tables`;
+on AWS, `lb_agent.py` fetches it on the LB instance and sends it back over its SSH
+channel. To read it by hand on the LB host: `curl -s localhost:9105/tables` (ask
+twice: the first answer is `{"pending":true}` while the first copy is made).
+
 ## Conntrack and the 15 s timeout
 
 `maglev-lb`'s conntrack forgets a flow after it has been idle for the timeout; it

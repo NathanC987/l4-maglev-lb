@@ -166,6 +166,14 @@ class Handler(BaseHTTPRequestHandler):
         fut = asyncio.run_coroutine_threadsafe(coro_fn(*args), self.server.loop)
         return fut.result(timeout=5)
 
+    def _query_gen(self):
+        """?gen=N: the Maglev table generation the canvas already holds."""
+        vals = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("gen", [])
+        try:
+            return int(vals[0]) if vals else None
+        except ValueError:
+            return None
+
     # --- routing -----------------------------------------------------------------
     def _route(self):
         path = urllib.parse.urlsplit(self.path).path
@@ -200,6 +208,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(status, body)
             elif route == ("POST", "/api/v1/session/reset"):
                 self._json(200, self._call(self.server.bridge.reset_session))
+            elif route == ("GET", "/api/v1/lb/tables"):
+                status, body = self._call(self.server.bridge.lb_tables, self._query_gen())
+                self._json(status, body)
             elif route == ("POST", "/api/v1/lb/restart"):
                 self._json(202, self._call(self.server.bridge.request_lb_restart))
             elif route == ("POST", "/api/v1/cloud/stop") and hasattr(self.server.bridge, "request_cloud_stop"):

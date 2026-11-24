@@ -20,6 +20,7 @@
 #include "net/eth.h"
 #include "net/raw_socket.h"
 #include "stats/stats_registry.h"
+#include "ui/inspector.h"
 #include "ui/metrics_http.h"
 #include "ui/tui.h"
 
@@ -182,6 +183,7 @@ int main(int argc, char **argv) {
     bool stats_initialized = false;
     struct health_checker *hc = NULL;
     struct metrics_http *mh = NULL;
+    struct inspector *insp = NULL;
     struct datapath *dp = NULL;
     int run_rc = 1;
 
@@ -262,12 +264,15 @@ int main(int argc, char **argv) {
     }
 
     if (cfg.metrics_port != 0) {
+        /* GET /tables is served by the exporter, so the copy only exists with it. */
+        insp = inspector_create();
         struct metrics_http_config mh_cfg = {
             .port = cfg.metrics_port,
             .bm = bm,
             .tg = tg,
             .ct = ct,
             .stats = &stats,
+            .inspector = insp,
             .table_size = cfg.table_size,
             .configured_backends = cfg.n_backends,
         };
@@ -283,8 +288,11 @@ int main(int argc, char **argv) {
                     cfg.metrics_port);
             metrics_http_destroy(mh);
             mh = NULL;
+            inspector_destroy(insp);
+            insp = NULL;
         } else {
-            fprintf(stderr, "maglev-lb: Prometheus metrics on :%u/metrics\n", cfg.metrics_port);
+            fprintf(stderr, "maglev-lb: Prometheus metrics on :%u/metrics, tables on /tables\n",
+                    cfg.metrics_port);
         }
     }
 
@@ -297,6 +305,7 @@ int main(int argc, char **argv) {
             .tg = tg,
             .ct = ct,
             .stats = &stats,
+            .inspector = insp,
             .reaper_interval_ms = REAPER_INTERVAL_MS,
             .tcp_timeout_ns = (uint64_t)cfg.ct_tcp_timeout_ms * 1000000ULL,
             .udp_timeout_ns = (uint64_t)cfg.ct_udp_timeout_ms * 1000000ULL,
@@ -323,6 +332,7 @@ cleanup:
      * datapath thread. */
     metrics_http_stop(mh);
     metrics_http_destroy(mh);
+    inspector_destroy(insp); /* after both of its users: the datapath and the exporter */
     if (stats_initialized) {
         stats_registry_destroy(&stats);
     }

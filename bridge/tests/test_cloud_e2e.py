@@ -264,6 +264,26 @@ class CanvasDrivesEc2(unittest.TestCase):
         r.api("POST", "/actions", {"action": "drain", "target": "b1"})
         r.wait(lambda: r.state()["backends"]["b1"]["lb"]["draining"], 5, "the drain to show in LB metrics")
 
+    def test_the_lb_tables_come_from_the_lb_host(self):
+        r = self.rig
+        r.api("PUT", "/desired", doc(backends=("b1", "b2")))
+        r.wait(self.serving("b1", "b2"), 25, "both serving")
+        got = {}
+
+        def ready():
+            got.clear()
+            got.update(r.api("GET", "/lb/tables"))
+            return not got.get("pending")
+        r.wait(ready, 10, "the tables")
+        self.assertEqual((got["source"]["where"], got["source"]["instance"]), ("aws", r.ids["lb"]))
+        self.assertEqual({b["node"] for b in got["backends"]}, {"b1", "b2"})
+        self.assertEqual(got["conntrack"]["rows"][0]["client"], "c1")
+        self.assertIn("table", got)
+        # Asked with the generation it holds, the canvas gets everything but the table.
+        again = r.api("GET", f"/lb/tables?gen={got['generation']}")
+        self.assertNotIn("table", again)
+        self.assertEqual(again["generation"], got["generation"])
+
     def test_load_waits_for_the_lb(self):
         r = self.rig
         r.api("PUT", "/desired", doc())

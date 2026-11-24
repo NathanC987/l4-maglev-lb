@@ -52,6 +52,15 @@ size_t conntrack_reap_slice(struct conntrack_table *ct, uint64_t now_ns, uint64_
 
 size_t conntrack_bucket_count(const struct conntrack_table *ct);
 
+typedef void (*conntrack_visit_fn)(const struct flow_key *key, int32_t backend_id,
+                                   uint64_t last_seen_ns, void *ctx);
+
+/* Calls visit once for every entry, without changing any of them. Same thread
+ * rules as lookup/insert: only the datapath thread may call it (see
+ * ui/inspector.h, which uses it to show the table). Walks every bucket, so its
+ * cost grows with max_flows, not with the number of live entries. */
+void conntrack_for_each(const struct conntrack_table *ct, conntrack_visit_fn visit, void *ctx);
+
 /* Thread-safe (atomic) even though lookup/insert/reap_slice are not - safe
  * to call from e.g. the metrics exporter thread while the datapath thread
  * is concurrently inserting/reaping. */

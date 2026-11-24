@@ -274,6 +274,10 @@ int datapath_run(struct datapath *dp) {
                     dp->cfg.stats);
                 atomic_fetch_add_explicit(&dp->cfg.stats->conntrack_evictions, reaped,
                                            memory_order_relaxed);
+                if (dp->cfg.inspector != NULL) {
+                    inspector_on_tick(dp->cfg.inspector, table_generator_get_active(dp->cfg.tg),
+                                      dp->cfg.ct, now_ns());
+                }
                 /* Piggybacks on the reaper tick as this thread's own
                  * between-packets quiescent point - see table_generator.h. */
                 table_generator_reclaim(dp->cfg.tg);

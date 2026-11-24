@@ -149,6 +149,14 @@ size_t conntrack_bucket_count(const struct conntrack_table *ct) {
     return ct->bucket_count;
 }
 
+void conntrack_for_each(const struct conntrack_table *ct, conntrack_visit_fn visit, void *ctx) {
+    for (size_t i = 0; i < ct->bucket_count; i++) {
+        for (const struct conntrack_entry *e = ct->buckets[i]; e != NULL; e = e->next) {
+            visit(&e->key, e->backend_id, e->last_seen_ns, ctx);
+        }
+    }
+}
+
 size_t conntrack_active_flows(const struct conntrack_table *ct) {
     return atomic_load_explicit(&ct->active, memory_order_relaxed);
 }

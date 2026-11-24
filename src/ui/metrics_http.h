@@ -8,6 +8,7 @@
 #include "../backend/table_generator.h"
 #include "../conntrack/conntrack.h"
 #include "../stats/stats_registry.h"
+#include "inspector.h"
 
 struct metrics_http_config {
     uint16_t port; /* host byte order; 0 means "don't start" (caller's choice, not enforced here) */
@@ -15,6 +16,7 @@ struct metrics_http_config {
     struct table_generator *tg;
     struct conntrack_table *ct;
     struct lb_stats *stats;
+    struct inspector *inspector; /* serves GET /tables when set; may be NULL */
     uint32_t table_size;        /* configured Maglev M, exposed as a gauge for context */
     size_t configured_backends; /* count of --backend entries at startup, exposed as a gauge */
 };
@@ -24,8 +26,10 @@ struct metrics_http;
 struct metrics_http *metrics_http_create(const struct metrics_http_config *cfg);
 void metrics_http_destroy(struct metrics_http *m);
 
-/* Spawns a thread that listens on cfg.port and serves any HTTP GET request
- * with a Prometheus text-exposition response, built fresh from
+/* Spawns a thread that listens on cfg.port. GET /tables[?gen=N] answers with
+ * the inspector's JSON copy of the Maglev and conntrack tables (see
+ * inspector.h; N is the table generation the reader already holds). Any other
+ * request gets a Prometheus text-exposition response, built fresh from
  * stats_registry / backend_manager / table_generator / conntrack on every
  * single request - always live, nothing cached or pushed. All of those are
  * already safe to read from a thread other than the datapath thread (see

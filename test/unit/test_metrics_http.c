@@ -5,17 +5,19 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "backend/backend_manager.h"
 #include "backend/table_generator.h"
 #include "conntrack/conntrack.h"
 #include "stats/stats_registry.h"
+#include "ui/inspector.h"
 #include "ui/metrics_http.h"
 
 #define TEST_PORT 19105
 
-static size_t http_get(uint16_t port, char *out, size_t out_cap) {
+static size_t http_get(uint16_t port, const char *path, char *out, size_t out_cap) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(fd >= 0);
 
@@ -26,7 +28,9 @@ static size_t http_get(uint16_t port, char *out, size_t out_cap) {
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     assert(connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
 
-    const char *req = "GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    char req[256];
+    snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+             path);
     ssize_t sent = send(fd, req, strlen(req), 0);
     assert(sent == (ssize_t)strlen(req));
 
@@ -83,12 +87,16 @@ int main(void) {
     stats_backend_flow_opened(&stats, id1);
     stats_backend_flow_closed(&stats, id1);
 
+    struct inspector *insp = inspector_create();
+    assert(insp != NULL);
+
     struct metrics_http_config cfg = {
         .port = TEST_PORT,
         .bm = bm,
         .tg = tg,
         .ct = ct,
         .stats = &stats,
+        .inspector = insp,
         .table_size = 1009,
         .configured_backends = 2,
     };
@@ -97,7 +105,7 @@ int main(void) {
     assert(metrics_http_start(m) == 0);
 
     static char resp[262144];
-    size_t len = http_get(TEST_PORT, resp, sizeof(resp));
+    size_t len = http_get(TEST_PORT, "/metrics", resp, sizeof(resp));
     assert(len > 0);
 
     assert(strstr(resp, "HTTP/1.1 200 OK") != NULL);
@@ -140,8 +148,32 @@ int main(void) {
              id1);
     assert(strstr(resp, expect_assigned1) != NULL);
 
+    /* /tables: nothing copied until someone asks and the datapath ticks. */
+    len = http_get(TEST_PORT, "/tables", resp, sizeof(resp));
+    assert(strstr(resp, "Content-Type: application/json") != NULL);
+    assert(strstr(resp, "{\"pending\":true}") != NULL);
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    /* This thread stands in for the datapath, the only one allowed to tick. */
+    inspector_on_tick(insp, table_generator_get_active(tg), ct, now);
+    len = http_get(TEST_PORT, "/tables", resp, sizeof(resp));
+    assert(strstr(resp, "\"m\":1009") != NULL);
+    assert(strstr(resp, "\"table\":\"") != NULL);
+    assert(strstr(resp, "\"active\":1") != NULL);
+
+    char gen_path[64];
+    snprintf(gen_path, sizeof(gen_path), "/tables?gen=%llu",
+             (unsigned long long)table_generator_generation(tg));
+    len = http_get(TEST_PORT, gen_path, resp, sizeof(resp));
+    assert(strstr(resp, "\"generation\"") != NULL);
+    assert(strstr(resp, "\"table\"") == NULL); /* the reader already has this generation */
+    (void)len;
+
     metrics_http_stop(m);
     metrics_http_destroy(m);
+    inspector_destroy(insp);
     stats_registry_destroy(&stats);
     conntrack_destroy(ct);
     table_generator_destroy(tg);

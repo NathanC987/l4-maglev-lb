@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Stands in for maglev-lb in test_cloud_e2e.py: serves /metrics, with a backend up
-exactly while something accepts on its port, and takes DRAIN/UNDRAIN on the admin FIFO."""
+exactly while something accepts on its port, and takes DRAIN/UNDRAIN on the admin FIFO.
+/tables answers like src/ui/inspector.c: pending at first, then a 7-slot table."""
 import argparse
+import base64
 import http.server
 import json
 import os
@@ -20,6 +22,7 @@ with open(os.path.join(os.environ.get("HOME", "/tmp"), "ssh.json")) as f:
     base = json.load(f)["port_base"]
 n = len(args.backend)
 up, draining = [False] * n, [False] * n
+tables_asked = False
 
 
 def probe():
@@ -43,7 +46,32 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def tables(self):
+        global tables_asked
+        if not tables_asked:
+            tables_asked = True
+            return {"pending": True}
+        live = [i for i in range(n) if up[i]]
+        table = bytes((live[s % len(live)] + 1) if live else 0 for s in range(7))
+        doc = {"generation": 1, "ageMs": 5, "m": 7,
+               "backends": [{"id": i, "addr": f"10.99.1.{31 + i}", "port": 8080,
+                             "slots": table.count(i + 1)} for i in live],
+               "conntrack": {"active": 1, "scanUs": 9, "rowsPerBackend": 16,
+                             "flows": [{"id": live[0], "n": 1}] if live else [],
+                             "rows": [{"src": "10.99.1.10", "sport": 40000, "dport": 8080, "proto": "tcp",
+                                       "id": live[0], "slot": 0, "idleMs": 3}] if live else []}}
+        if "gen=1" not in self.path:
+            doc["table"] = base64.b64encode(table).decode()
+        return doc
+
     def do_GET(self):
+        if self.path.startswith("/tables"):
+            body = json.dumps(self.tables()).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         lines = ["maglev_lb_rx_packets_total 1"]
         for i in range(n):
             lab = f'{{backend_id="{i}",backend_addr="a"}}'

@@ -35,6 +35,9 @@ class FakeBridge:
     async def request_lb_restart(self):
         return {"accepted": True}
 
+    async def lb_tables(self, gen):
+        return 200, {"askedWith": gen}
+
 
 VALID = {"schema": "l4mlb-live/1",
          "nodes": {"lb": "lb", "clients": [{"id": "c1", "rps": 10}], "backends": [{"id": "s1"}]},
@@ -122,6 +125,13 @@ class TestHTTP(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(self.req("POST", "/api/v1/actions",
                                   body={"action": "nuke", "target": "s1"})[0], 422)
+
+    def test_lb_tables_route(self):
+        st, body, _ = self.req("GET", "/api/v1/lb/tables?gen=5")
+        self.assertEqual((st, json.loads(body)), (200, {"askedWith": 5}))
+        st, body, _ = self.req("GET", "/api/v1/lb/tables?gen=nope")
+        self.assertEqual(json.loads(body), {"askedWith": None})
+        self.assertEqual(self.req("GET", "/api/v1/lb/tables", token=False)[0], 401)
 
     def test_methods_and_routes(self):
         self.assertEqual(self.req("DELETE", "/api/v1/desired")[0], 405)

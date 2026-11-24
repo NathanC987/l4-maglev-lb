@@ -9,7 +9,9 @@ that pushes is what makes this work across an ocean: the bridge polls a local
 maglev-lb four times a second, but one scrape over a 200 ms link takes longer than
 the 0.5 s it allows, and its CPU counters are in this host's /proc anyway.
 
-Reads {"op": "admin", "verb": "DRAIN"|"UNDRAIN", "id": N} on stdin. When stdin closes
+Reads {"op": "admin", "verb": "DRAIN"|"UNDRAIN", "id": N} on stdin, and
+{"op": "tables", "gen": N|null}, which it answers with {"type": "tables", "doc": ...}:
+maglev-lb's /tables document (see lbtables.py), or null if it did not answer. When stdin closes
 (the bridge exited, or the connection dropped) it stops maglev-lb and exits, and
 pdeathsig stops maglev-lb if this process is killed outright.
 """
@@ -25,6 +27,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lbmetrics  # noqa: E402
+import lbtables  # noqa: E402
 
 BACKEND_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}:\d{1,5}@[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 ADMIN_VERBS = {"DRAIN", "UNDRAIN"}
@@ -32,9 +35,14 @@ READY_TIMEOUT_S = 20.0
 STOP_TIMEOUT_S = 5.0
 
 
+_emit_lock = threading.Lock()
+
+
 def emit(obj):
-    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
+    # Two threads write here: the report loop and the command reader.
+    with _emit_lock:
+        sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
 
 
 def default_iface():
@@ -74,12 +82,38 @@ def write_admin(path, line):
         os.close(fd)
 
 
+def exporter_url(args, path):
+    return f"http://{args.metrics_host or args.director_ip}:{args.metrics_port}{path}"
+
+
+def tables_gen(msg):
+    """The generation in a tables request: None to ask for the table too, False if
+    this is not a tables request at all."""
+    if not isinstance(msg, dict) or msg.get("op") != "tables":
+        return False
+    gen = msg.get("gen")
+    return gen if isinstance(gen, int) and not isinstance(gen, bool) and gen >= 0 else None
+
+
+def send_tables(url, gen):
+    try:
+        doc = lbtables.fetch(url, gen, 1.0)
+    except (OSError, ValueError):
+        doc = None
+    emit({"type": "tables", "doc": doc})
+
+
 def read_commands(args, stop):
     for raw in sys.stdin:
         try:
-            line = admin_line(json.loads(raw), len(args.backend))
+            msg = json.loads(raw)
         except ValueError:
             continue
+        gen = tables_gen(msg)
+        if gen is not False:
+            send_tables(exporter_url(args, "/tables"), gen)
+            continue
+        line = admin_line(msg, len(args.backend))
         if line:
             write_admin(args.fifo, line)
     stop.set()
@@ -156,7 +190,7 @@ def main():
             emit({"type": "exit", "reason": "maglev-lb did not start"})
             return 1
         emit({"type": "ready", "pid": proc.pid})
-        url = f"http://{args.metrics_host or args.director_ip}:{args.metrics_port}/metrics"
+        url = exporter_url(args, "/metrics")
         while not stop.wait(args.interval_ms / 1000.0):
             if proc.poll() is not None:
                 emit({"type": "exit", "reason": f"maglev-lb exited ({proc.returncode})"})

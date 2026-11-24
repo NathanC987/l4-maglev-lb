@@ -7,6 +7,7 @@
 #include "../backend/table_generator.h"
 #include "../conntrack/conntrack.h"
 #include "../stats/stats_registry.h"
+#include "../ui/inspector.h"
 
 struct datapath_config {
     const char *ifname; /* single shared interface: both ingress and egress in v1 */
@@ -16,6 +17,7 @@ struct datapath_config {
     struct table_generator *tg;
     struct conntrack_table *ct;
     struct lb_stats *stats;
+    struct inspector *inspector; /* NULL: the tables are never copied out for viewing */
     uint32_t reaper_interval_ms;
     uint64_t tcp_timeout_ns;
     uint64_t udp_timeout_ns;

@@ -22,6 +22,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lbmetrics  # noqa: E402
+import lbtables  # noqa: E402
 import livecommon as lc  # noqa: E402
 import schema  # noqa: E402
 from children import (LB_IP, NS_CLIENT, NS_LB, VIP, BACKEND_PORT, Executor,  # noqa: E402
@@ -34,6 +35,7 @@ BRIDGE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(BRIDGE_DIR)
 BENCH_DIR = os.path.join(REPO_ROOT, "scripts", "bench")
 METRICS_URL = f"http://{LB_IP}:9105/metrics"
+TABLES_URL = f"http://{LB_IP}:9105/tables"
 TICK_S = 0.25
 HC = {"hcIntervalMs": 500, "hcTimeoutMs": 300, "hcRise": 2, "hcFall": 2}
 AUTO_PAUSE_AFTER_S = 10.0
@@ -57,6 +59,7 @@ class Bridge:
         self.loop = loop
         self.run_dir = os.path.join(BRIDGE_DIR, ".run")
         self.admin_fifo = os.path.join(self.run_dir, "admin.fifo")
+        self.tables = lbtables.TablesCache()
         self.ex = self.make_executor()
         self.r = Reconciler(self.ex, args.slots)
         self.publisher = Publisher()
@@ -250,6 +253,32 @@ class Bridge:
             self.lb_restart_pending = True
             lc.spawn(self.restart_lb())
         return {"accepted": True}
+
+    async def lb_tables(self, client_gen):
+        """GET /api/v1/lb/tables: maglev-lb's live Maglev and conntrack tables, in
+        canvas terms. maglev-lb starts copying them only once asked, so the first
+        answer after a quiet spell is {"pending": true}."""
+        key = self.lb_pid()
+        if not self.lb_alive() or key is None:
+            return 503, {"error": "maglev-lb is not running"}
+        try:
+            doc = await self.fetch_lb_tables(self.tables.known(key))
+        except (OSError, ValueError, asyncio.TimeoutError):
+            return 503, {"error": "maglev-lb did not answer"}
+        doc = self.tables.merge(key, doc)
+        if doc is None:
+            return 200, {"pending": True}
+        owners = {sl.lb_id: sl.owner for sl in self.r.slots.values()}
+        clients = {self.ex.client_ip(rec.index): cid for cid, rec in self.r.clients.items()}
+        return 200, lbtables.to_canvas(doc, owners, clients, client_gen,
+                                       {"source": self.tables_source(), "run": key,
+                                        "ctTimeoutMs": self.args.ct_timeout_ms})
+
+    async def fetch_lb_tables(self, gen):
+        return await asyncio.to_thread(lbtables.fetch, TABLES_URL, gen, 1.0)
+
+    def tables_source(self):
+        return {"where": "local"}
 
     # --- snapshot --------------------------------------------------------------------
     def lb_alive(self):

@@ -281,17 +281,92 @@ static void build_metrics_body(struct metrics_http *m, struct metrics_buf *b) {
 
 /* --- HTTP layer: minimal, single-request-at-a-time, no real parsing --- */
 
+static uint64_t mono_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+/* Sends all of buf: a /tables body is ~100 KB, more than one send() may take. */
+static void send_all(int fd, const char *buf, size_t len) {
+    while (len > 0) {
+        ssize_t w = send(fd, buf, len, MSG_NOSIGNAL);
+        if (w <= 0) {
+            return;
+        }
+        buf += w;
+        len -= (size_t)w;
+    }
+}
+
+static void send_response(int cfd, const char *ctype, const char *body, size_t len) {
+    char header[256];
+    int hlen = snprintf(header, sizeof(header),
+                         "HTTP/1.1 200 OK\r\n"
+                         "Content-Type: %s\r\n"
+                         "Content-Length: %zu\r\n"
+                         "Connection: close\r\n"
+                         "\r\n",
+                         ctype, len);
+    if (hlen > 0) {
+        send_all(cfd, header, (size_t)hlen);
+        send_all(cfd, body, len);
+    }
+}
+
+/* True for "GET /tables" or "GET /tables?...", with the gen=N query value
+ * (if any) in *gen. */
+static bool parse_tables_request(const char *req, bool *have_gen, uint64_t *gen) {
+    static const char prefix[] = "GET /tables";
+    if (strncmp(req, prefix, sizeof(prefix) - 1) != 0) {
+        return false;
+    }
+    const char *rest = req + sizeof(prefix) - 1;
+    if (*rest != ' ' && *rest != '?') {
+        return false;
+    }
+    *have_gen = false;
+    if (*rest == '?') {
+        const char *g = strstr(rest, "gen=");
+        const char *end = strchr(rest, ' ');
+        if (g != NULL && (end == NULL || g < end)) {
+            char *stop;
+            unsigned long long v = strtoull(g + 4, &stop, 10);
+            if (stop != g + 4) {
+                *have_gen = true;
+                *gen = v;
+            }
+        }
+    }
+    return true;
+}
+
 static void handle_client(struct metrics_http *m, int cfd) {
     struct timeval tv = {.tv_sec = REQUEST_TIMEOUT_SEC, .tv_usec = 0};
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    /* We serve the same response regardless of method/path, so the request
-     * itself only needs to be drained, not parsed - one recv() is enough
-     * for any real HTTP client's request line + headers in one segment. */
+    /* Only the request line matters (the path picks /tables or the metrics),
+     * so one recv() is enough: any real HTTP client sends the request line
+     * and headers in one segment. */
     char req[2048];
-    ssize_t n = recv(cfd, req, sizeof(req), 0);
-    (void)n;
+    ssize_t n = recv(cfd, req, sizeof(req) - 1, 0);
+    req[n > 0 ? n : 0] = '\0';
+
+    bool have_gen = false;
+    uint64_t gen = 0;
+    if (m->cfg.inspector != NULL && parse_tables_request(req, &have_gen, &gen)) {
+        uint64_t now = mono_now_ns();
+        inspector_want(m->cfg.inspector, now);
+        char *json = NULL;
+        size_t len = inspector_render_json(m->cfg.inspector, have_gen, gen, now, &json);
+        if (json != NULL) {
+            send_response(cfd, "application/json", json, len);
+            free(json);
+        }
+        close(cfd);
+        return;
+    }
 
     char *body = malloc(METRICS_BODY_CAP);
     if (body == NULL) {
@@ -300,21 +375,7 @@ static void handle_client(struct metrics_http *m, int cfd) {
     }
     struct metrics_buf mb = {.data = body, .cap = METRICS_BODY_CAP, .len = 0};
     build_metrics_body(m, &mb);
-
-    char header[256];
-    int hlen = snprintf(header, sizeof(header),
-                         "HTTP/1.1 200 OK\r\n"
-                         "Content-Type: text/plain; version=0.0.4\r\n"
-                         "Content-Length: %zu\r\n"
-                         "Connection: close\r\n"
-                         "\r\n",
-                         mb.len);
-    if (hlen > 0) {
-        ssize_t w1 = send(cfd, header, (size_t)hlen, MSG_NOSIGNAL);
-        ssize_t w2 = send(cfd, mb.data, mb.len, MSG_NOSIGNAL);
-        (void)w1;
-        (void)w2;
-    }
+    send_response(cfd, "text/plain; version=0.0.4", mb.data, mb.len);
 
     free(body);
     close(cfd);

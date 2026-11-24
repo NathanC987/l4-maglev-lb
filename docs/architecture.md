@@ -144,8 +144,8 @@ notices a stopped datapath immediately rather than on its next redraw tick.
 ## The Prometheus exporter
 
 `src/ui/metrics_http.c` is a small hand-rolled HTTP/1.1 server (no framework - a raw
-socket, `accept()`, one connection handled at a time) that answers every request,
-regardless of method or path, with a freshly-built Prometheus text-exposition body. It
+socket, `accept()`, one connection handled at a time) that answers every request
+except `GET /tables` with a freshly-built Prometheus text-exposition body. It
 reads exactly what the TUI reads (`stats_registry`, `backend_manager`,
 `table_generator`), plus `conntrack_active_flows()` for a total-flows gauge the TUI
 doesn't show. Nothing is cached or pushed; a scrape always sees the current state.
@@ -153,6 +153,17 @@ doesn't show. Nothing is cached or pushed; a scrape always sees the current stat
 Its thread uses the same `poll()`-on-a-stop-`eventfd` pattern as the datapath/TUI
 coordination above, for the same reason: predictable shutdown that doesn't depend on
 any particular blocking call's signal-interruption behavior.
+
+`GET /tables[?gen=N]` returns a JSON copy of the Maglev lookup table and the
+conntrack table (`src/ui/inspector.c`), which the live canvas draws. Unlike the
+metrics, these can't be read from this thread: only the datapath thread may touch
+the active routing snapshot and conntrack. So a request only marks the tables as
+wanted, and the datapath makes the copy on its next reaper tick, while someone has
+asked within the last 3 s and at most once a second, and swaps it in under a mutex
+it never waits on (`trylock`; a busy reader just delays the publish to the next
+copy). The copy holds the table (one byte per slot), exact per-backend flow counts,
+and the 16 most recently seen entries per backend. With `?gen=N` naming the
+generation the reader already has, the table is left out.
 
 Metric names are prefixed `maglev_lb_`, counters end in `_total`, and per-backend
 series carry both `backend_id` and `backend_addr` labels. The full list, each with a

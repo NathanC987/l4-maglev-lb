@@ -40,6 +40,7 @@ set(MAGLEV_LB_SOURCES
     src/forward/datapath.c
     src/ui/tui.c
     src/ui/metrics_http.c
+    src/ui/inspector.c
 )
 
 add_executable(maglev-lb ${MAGLEV_LB_SOURCES})
